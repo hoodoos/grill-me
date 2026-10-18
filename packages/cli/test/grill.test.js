@@ -275,3 +275,15 @@ test("metrics: user-agent header and question-count bucket on every request", as
   assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0");
   assert.equal(creates().at(-1).qb, "1");
 });
+
+test("wait honours an AbortSignal promptly and keeps the pending file", async (t) => {
+  const { home, server, fake } = await fixture(t);
+  const r = await send(DEMO_TEXT, { server, home });
+  const ctrl = new AbortController();
+  const started = Date.now();
+  setTimeout(() => ctrl.abort(), 120);
+  await assert.rejects(() => wait(r.id, { home, signal: ctrl.signal }), { code: "aborted" });
+  assert.ok(Date.now() - started < 2000, "the wait stopped promptly");
+  assert.ok((await readPending(home, r.id)) !== null, "pending file kept");
+  assert.ok(fake.grill(r.id) !== undefined, "grill not deleted");
+});

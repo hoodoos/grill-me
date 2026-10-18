@@ -20,7 +20,7 @@ export class ApiError extends Error {
 const codeFor = (status) =>
   status === 404 ? "gone" : status === 429 ? "limited" : status >= 500 ? "server" : "bad";
 
-async function request(server, method, path, { token, body, waitSeconds = 0, ok = [], agent } = {}) {
+async function request(server, method, path, { token, body, waitSeconds = 0, ok = [], agent, signal } = {}) {
   const timeoutMs = (waitSeconds + 15) * 1000;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -28,7 +28,7 @@ async function request(server, method, path, { token, body, waitSeconds = 0, ok 
   try {
     res = await fetch(`${server}${path}`, {
       method,
-      signal: ctrl.signal,
+      signal: signal ? AbortSignal.any([ctrl.signal, signal]) : ctrl.signal,
       headers: {
         "user-agent": userAgent(agent),
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
@@ -76,8 +76,8 @@ export async function getGrill(server, id, { agent } = {}) {
 }
 
 // GET /api/g/:id/answers?wait=N → { status: 200, answers: {ct, iv} } or { status: 204 }.
-export async function waitAnswers(server, id, seconds, { agent } = {}) {
-  return request(server, "GET", `/api/g/${id}/answers?wait=${seconds}`, { waitSeconds: seconds, agent });
+export async function waitAnswers(server, id, seconds, { agent, signal } = {}) {
+  return request(server, "GET", `/api/g/${id}/answers?wait=${seconds}`, { waitSeconds: seconds, agent, signal });
 }
 
 // DELETE /api/g/:id. 204 on success; 404 throws a "gone" ApiError (callers treat it as success).
