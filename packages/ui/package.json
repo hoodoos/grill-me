@@ -1,0 +1,9 @@
+{
+  "name": "@grill-me/ui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/grill.js",
+    "./grill.css": "./src/grill.css"
+  }
+}
