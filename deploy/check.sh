@@ -68,6 +68,26 @@ else
   echo "SKIP /stats/data.json with token (no STATS_TOKEN env and no /etc/grill-me/env)"
 fi
 
+# ---------- the install guide (content negotiation on /) ----------
+GUIDE="$(cat "$HERE/../site/install.md" 2>/dev/null || true)"
+body=$(curl -sS -m 15 "$BASE/" || true) # curl's defaults: UA curl/*, Accept */*
+if [ -n "$GUIDE" ] && [ "$body" = "$GUIDE" ]; then pass "GET / (curl defaults) → the guide"; else fail "GET / (curl defaults) → the guide"; fi
+
+CHROME_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+CHROME_ACCEPT='text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+body=$(curl -sS -m 15 -H "Accept: $CHROME_ACCEPT" -A "$CHROME_UA" "$BASE/" || true)
+ctype=$(curl -sS -m 15 -o /dev/null -w '%{content_type}' -H "Accept: $CHROME_ACCEPT" -A "$CHROME_UA" "$BASE/" || true)
+if [[ "$body" == *"<html"* && "$ctype" == text/html* ]]; then pass "GET / (browser) → HTML"; else fail "GET / (browser) → HTML"; fi
+
+body=$(curl -sS -m 15 -H 'Accept: text/markdown' "$BASE/" || true)
+if [ -n "$GUIDE" ] && [ "$body" = "$GUIDE" ]; then pass "GET / (Accept: text/markdown) → the guide"; else fail "GET / (Accept: text/markdown) → the guide"; fi
+
+for p in /install /llms.txt; do
+  hdrs=$(curl -sS -m 15 -D - -o /dev/null "$BASE$p" || true)
+  code=$(head -1 <<<"$hdrs" | awk '{print $2}')
+  if [ "$code" = "200" ] && grep -qi '^content-type: text/plain' <<<"$hdrs"; then pass "GET $p → 200 text/plain"; else fail "GET $p → $code"; fi
+done
+
 if [ -f "$BEFORE/www.code" ]; then
   now_code=$(curl -k -s -o /dev/null -m 10 -w '%{http_code}' https://www.grill-me.ai/ || true)
   if [ "$now_code" = "$(cat "$BEFORE/www.code")" ]; then pass "www.grill-me.ai unchanged"; else fail "www.grill-me.ai: $(cat "$BEFORE/www.code") → $now_code"; fi
