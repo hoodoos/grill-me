@@ -181,11 +181,10 @@ test("an id that starts with a dash is parsed as the id, not an option", async (
   }
 });
 
-test("mcp is a placeholder that exits 1", async (t) => {
+test("mcp starts the stdio server and exits when stdin closes", async (t) => {
   const { home } = await fixture(t);
-  const r = await run(["mcp"], { home });
-  assert.equal(r.code, 1);
-  assert.match(r.stdout, /coming in the next release/);
+  const r = await run(["mcp"], { input: "", home });
+  assert.equal(r.code, 0);
 });
 
 test("send over stdin survives an emoji split across chunks", async (t) => {

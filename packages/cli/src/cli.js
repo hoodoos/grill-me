@@ -162,9 +162,12 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
         return 0;
       }
 
-      case "mcp":
-        out("grill-me mcp: coming in the next release.");
-        return 1;
+      case "mcp": {
+        parse(rest, {}, { max: 0 });
+        const { startStdioServer } = await import("./mcp-stdio.js");
+        await startStdioServer({ stdin, stdout, stderr });
+        return 0;
+      }
 
       default:
         err(`grill-me: unknown command "${cmd}"`);
