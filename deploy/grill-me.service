@@ -12,6 +12,7 @@ Environment=HOST=127.0.0.1
 Environment=GRILL_ME_DB=/var/lib/grill-me/grill-me.db
 Environment=NODE_ENV=production
 StateDirectory=grill-me
+EnvironmentFile=/etc/grill-me/env
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10

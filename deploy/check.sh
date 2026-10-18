@@ -46,6 +46,28 @@ hdrs=$(curl -sS -m 15 -D - -o /dev/null "$BASE/api/g/$RID")
 code=$(head -1 <<<"$hdrs" | awk '{print $2}')
 if [ "$code" = "404" ] && grep -qi '^content-type: application/json' <<<"$hdrs"; then pass "GET /api/g/<random> → 404 JSON"; else fail "GET /api/g/<random> → $code"; fi
 
+# /healthz (public), /go/hub (counted redirect), /stats (private)
+body=$(curl -sS -m 15 "$BASE/healthz")
+if [ "$body" = '{"ok":true}' ]; then pass "/healthz → 200 {\"ok\":true}"; else fail "/healthz → $body"; fi
+read -r code redir <<<"$(curl -sS -m 15 -o /dev/null -w '%{http_code} %{redirect_url}' "$BASE/go/hub")"
+if [ "$code" = "302" ] && [ "$redir" = "$BASE/hub" ]; then pass "/go/hub → 302 /hub"; else fail "/go/hub → $code $redir"; fi
+
+stats_body=$(curl -sS -m 15 "$BASE/stats")
+if grep -q 'type="password"' <<<"$stats_body" && ! grep -q 'data.json' <<<"$stats_body"; then
+  pass "/stats without auth shows the login page and no data"
+else
+  fail "/stats without auth didn't show the login page"
+fi
+code=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$BASE/stats/data.json")
+[ "$code" = "401" ] && pass "/stats/data.json without auth → 401" || fail "/stats/data.json without auth → $code"
+STATS_TOKEN="${STATS_TOKEN:-$(grep -s '^STATS_TOKEN=' /etc/grill-me/env | cut -d= -f2- || true)}"
+if [ -n "$STATS_TOKEN" ]; then
+  code=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $STATS_TOKEN" "$BASE/stats/data.json")
+  [ "$code" = "200" ] && pass "/stats/data.json with the token → 200" || fail "/stats/data.json with the token → $code"
+else
+  echo "SKIP /stats/data.json with token (no STATS_TOKEN env and no /etc/grill-me/env)"
+fi
+
 if [ -f "$BEFORE/www.code" ]; then
   now_code=$(curl -k -s -o /dev/null -m 10 -w '%{http_code}' https://www.grill-me.ai/ || true)
   if [ "$now_code" = "$(cat "$BEFORE/www.code")" ]; then pass "www.grill-me.ai unchanged"; else fail "www.grill-me.ai: $(cat "$BEFORE/www.code") → $now_code"; fi

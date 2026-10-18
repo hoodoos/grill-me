@@ -150,6 +150,21 @@ fi
 
 # ---------- 7. systemd ----------
 step "systemd"
+# /etc/grill-me/env: created once with a random stats token; GRILL_ME_VERSION updated every
+# deploy. The token is never printed.
+mkdir -p /etc/grill-me
+if [ ! -f /etc/grill-me/env ]; then
+  TOKEN=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)
+  printf 'STATS_TOKEN=%s\nMEMORY_MAX_BYTES=268435456\n' "$TOKEN" > /etc/grill-me/env
+  chown root:grill-me /etc/grill-me/env
+  chmod 640 /etc/grill-me/env
+  echo "created /etc/grill-me/env — read the stats token with: sudo cat /etc/grill-me/env"
+fi
+if grep -q '^GRILL_ME_VERSION=' /etc/grill-me/env; then
+  sed -i "s/^GRILL_ME_VERSION=.*/GRILL_ME_VERSION=$SHORT/" /etc/grill-me/env
+else
+  echo "GRILL_ME_VERSION=$SHORT" >> /etc/grill-me/env
+fi
 cp "$REL/deploy/grill-me.service" "$UNIT"
 systemctl daemon-reload
 systemctl enable grill-me >/dev/null
