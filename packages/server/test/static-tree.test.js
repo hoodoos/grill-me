@@ -48,7 +48,8 @@ test("the static tree nginx serves matches what the Node static routes serve", a
 // The nginx snippet must proxy exactly the prefixes the Node server answers dynamically
 // (/api/ and /g/); every other location must serve the static tree.
 test("the nginx snippet's locations match the Node server's routes", async () => {
-  const snippet = await readFile(path.join(ROOT, "deploy/nginx/grill-me.ai-locations.conf"), "utf8");
+  const text = async (p) => (await readFile(p, "utf8")).replace(/\r\n/g, "\n"); // tolerate a CRLF checkout
+  const snippet = await text(path.join(ROOT, "deploy/nginx/grill-me.ai-locations.conf"));
   const proxyLocations = [...snippet.matchAll(/^location (\S+) \{$/gm)].map((m) => m[1]);
   const proxied = [...snippet.matchAll(/location (\S+) \{\n    proxy_pass http:\/\/127\.0\.0\.1:8787;/g)].map((m) => m[1]);
   assert.deepEqual(proxied.sort(), ["/api/", "/g/"]);
@@ -58,7 +59,7 @@ test("the nginx snippet's locations match the Node server's routes", async () =>
   assert.match(snippet, /location = \/demo \{\n    try_files \/grill\.html =404;/);
   assert.match(snippet, /location \/ \{\n    try_files \$uri \$uri\.html \$uri\/ =404;/);
   // Node's dynamic routes are exactly /api/* and /g/:id.
-  const serverSrc = await readFile(path.join(ROOT, "packages/server/src/server.js"), "utf8");
+  const serverSrc = await text(path.join(ROOT, "packages/server/src/server.js"));
   assert.match(serverSrc, /p === "\/api\/g"/);
   assert.match(serverSrc, /pathname\.startsWith\("\/g\/"\)/);
 });
