@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "../src/server.js";
-import { wantsMarkdown, INSTALL_MD, LLMS_TXT } from "../src/install.js";
+import { wantsMarkdown, renderHomepage, INSTALL_MARKER, INSTALL_MD, LLMS_TXT } from "../src/install.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -37,6 +37,12 @@ const CASES = [
 test("wantsMarkdown: the negotiation rule", () => {
   for (const [label, accept, ua, expected] of CASES)
     assert.equal(wantsMarkdown(accept, ua), expected, label);
+});
+
+test("renderHomepage keeps $-sequences in the guide literal", () => {
+  // String.replace would read $&, $' and $1 as patterns; the replacer function must not.
+  const html = renderHomepage(`<body>${INSTALL_MARKER}</body>`, "Cost: `$&` and $' and $1\n");
+  assert.equal(html, "<body><p>Cost: <code>$&amp;</code> and $' and $1</p></body>");
 });
 
 async function start() {

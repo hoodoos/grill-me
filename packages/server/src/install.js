@@ -59,7 +59,8 @@ export function renderInstallHtml(md) {
 
 export function renderHomepage(template, md) {
   if (!template.includes(INSTALL_MARKER)) throw new Error(`index.html is missing ${INSTALL_MARKER}`);
-  return template.replace(INSTALL_MARKER, renderInstallHtml(md));
+  // A replacer function: $& and friends in the guide must stay literal.
+  return template.replace(INSTALL_MARKER, () => renderInstallHtml(md));
 }
 
 // What the server serves at startup: the raw guide, llms.txt and the rendered homepage.
