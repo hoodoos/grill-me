@@ -36,13 +36,13 @@ function saveLocal(id, hash, grill, snap, answers) {
   safeSet(grillKey(hash), JSON.stringify({ ts: Date.now(), grill, snap: snap ?? null, answers: answers ?? null }));
   safeSet(idKey(id), hash);
 }
-function loadLocal(id) {
+function loadByHash(hash) {
   try {
-    const hash = safeGet(idKey(id));
     const v = hash && JSON.parse(safeGet(grillKey(hash)) || "null");
     return v && Date.now() - v.ts < KEEP_MS ? v : null;
   } catch { return null; }
 }
+const loadLocal = (id) => loadByHash(safeGet(idKey(id)));
 
 // ---------- screens ----------
 const show = (id) => {
@@ -105,7 +105,7 @@ function runDemo() {
   if (!ok) return message("The demo grill failed to load.");
   currentGrill = grill;
   show("screen-grill");
-  mountGrill($("grill-root"), {
+  grillUi = mountGrill($("grill-root"), {
     grill,
     onSend: (answers) => { currentAnswers = answers; doneScreen({ demo: true }); return Promise.resolve(); },
   });
@@ -125,7 +125,7 @@ async function runGrill(id) {
     return message("This link is missing its key. Open the full link or QR code from your agent.");
   const ids = { id, secret };
   const { writeToken } = await deriveKeys(secret);
-  const local = loadLocal(id);
+  let local = loadLocal(id);
 
   let grill = null;
   let answered = false;
@@ -142,6 +142,9 @@ async function runGrill(id) {
     grill = await openGrill({ ct: data.ct, iv: data.iv }, ids);
     answered = data.answered;
     const hash = await contentHash(grill);
+    // A re-sent grill has a new id but the same content. Recover its shared progress before
+    // saving the new id mapping, otherwise a first visit overwrites the earlier snapshot.
+    local = loadByHash(hash);
     saveLocal(id, hash, grill, local?.snap ?? null, local?.answers ?? null);
   } catch {
     // Network failure (or undecryptable data): the local copy still lets you finish.
@@ -155,7 +158,7 @@ async function runGrill(id) {
   if (answered) {
     // Answers were already sent from this or another device.
     currentAnswers = local?.answers ?? { v: 1, answers: [] };
-    return doneScreen({});
+    return doneScreen({ id });
   }
   mount(grill, local?.snap ?? null, "");
 
@@ -187,13 +190,13 @@ async function runGrill(id) {
       const v = hash && JSON.parse(safeGet(grillKey(hash)) || "null");
       if (v) { v.snap = null; v.answers = answers; safeSet(grillKey(hash), JSON.stringify(v)); }
     } catch {}
-    doneScreen({});
+    doneScreen({ id });
   }
 
   function mount(g, snap, note) {
     currentGrill = g;
     show("screen-grill");
-    mountGrill($("grill-root"), {
+    grillUi = mountGrill($("grill-root"), {
       grill: g,
       saved: snap,
       note,

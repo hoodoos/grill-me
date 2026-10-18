@@ -62,20 +62,7 @@ curl -k -s -o /dev/null -m 10 -w '%{http_code}' https://www.grill-me.ai/ > "$BEF
 # ---------- 2. Node 24 under /opt/grill-me (system Node untouched) ----------
 step "node 24"
 mkdir -p "$OPT"
-SHASUMS=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt)
-TARBALL=$(grep "linux-$ARCH.tar.xz$" <<<"$SHASUMS" | awk '{print $2}')
-[ -n "$TARBALL" ] || die "no linux-$ARCH tarball in SHASUMS256.txt"
-VER=${TARBALL#node-v}; VER=${VER%%-linux-*}
-if [ "$(readlink "$OPT/node" || true)" != "$OPT/node-$VER" ]; then
-  echo "installing node $VER ($ARCH)"
-  curl -fsSL "https://nodejs.org/dist/latest-v24.x/$TARBALL" -o "/tmp/$TARBALL"
-  (cd /tmp && grep " $TARBALL\$" <<<"$SHASUMS" | sha256sum -c -)
-  tar -xJf "/tmp/$TARBALL" -C "$OPT"
-  rm "/tmp/$TARBALL"
-  ln -sfn "$OPT/node-$VER" "$OPT/node"
-else
-  echo "node $VER already current"
-fi
+bash "$HERE/lib/install-node.sh" "$OPT" "$ARCH"
 NODE="$OPT/node/bin/node"
 "$NODE" --version
 
@@ -125,31 +112,8 @@ fi
 
 # ---------- 5. nginx (before the switch: a failed nginx -t leaves the box as it was) ----------
 step "nginx"
-mkdir -p /etc/nginx/snippets
-# The http-context file (log format + the markdown map) replaced grill-me-logformat.conf.
-rm -f /etc/nginx/conf.d/grill-me-logformat.conf
-cp "$REL/deploy/nginx/grill-me-http.conf" "$HTTPCONF"
-BAK="$SITE.bak-$(date +%Y%m%d%H%M%S)"
-cp "$SITE" "$BAK"
-[ ! -f "$SNIPPET" ] || cp "$SNIPPET" "$BAK.snippet"
-cp "$REL/deploy/nginx/grill-me.ai-locations.conf" "$SNIPPET"
-if ! grep -q 'grill-me\.ai-locations\.conf' "$SITE"; then
-  # Add the include to the 443 block by pattern (the live file may differ from any patch).
-  bash "$REL/deploy/lib/patch-site.sh" "$SITE"
-  diff -u "$BAK" "$SITE" || true
-  if [ "$(grep -c 'grill-me\.ai-locations\.conf' "$SITE")" != "1" ]; then
-    echo "the include wasn't added exactly once; restoring $BAK" >&2
-    cp "$BAK" "$SITE"
-    if [ -f "$BAK.snippet" ]; then cp "$BAK.snippet" "$SNIPPET"; else rm -f "$SNIPPET"; fi
-    exit 1
-  fi
-fi
-if ! nginx -t; then
-  echo "nginx -t failed; restoring the site file and the previous snippet" >&2
-  cp "$BAK" "$SITE"
-  if [ -f "$BAK.snippet" ]; then cp "$BAK.snippet" "$SNIPPET"; else rm -f "$SNIPPET"; fi
-  exit 1
-fi
+bash "$REL/deploy/lib/configure-nginx.sh" "$REL" "$SITE" "$SNIPPET" "$HTTPCONF" \
+  /etc/nginx/conf.d/grill-me-logformat.conf
 systemctl reload nginx
 
 # ---------- 6. switch ----------

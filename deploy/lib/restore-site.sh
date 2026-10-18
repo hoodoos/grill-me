@@ -10,9 +10,11 @@ SITE="$1"
 
 if grep -q 'grill-me\.ai-locations\.conf' "$SITE"; then
   newest_clean=""
-  for b in $(ls -1t "$SITE".bak-* 2>/dev/null || true); do
+  while IFS= read -r b; do
+    # Older deployers also wrote .snippet backups here; only a plain numeric site backup fits.
+    [[ "${b#"$SITE.bak-"}" =~ ^[0-9]+$ ]] || continue
     if ! grep -q 'grill-me\.ai-locations\.conf' "$b"; then newest_clean="$b"; break; fi
-  done
+  done < <(ls -1t "$SITE".bak-* 2>/dev/null || true)
   if [ -n "$newest_clean" ]; then
     cp "$newest_clean" "$SITE"
     exit 0

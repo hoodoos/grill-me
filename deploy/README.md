@@ -25,6 +25,13 @@ never restarts nginx (only `nginx -t` + `systemctl reload nginx`).
 If the tests (or `npm ci`, or the static build) fail during a deploy, just run `deploy.sh` again:
 `.release-sha` is written last, so a half-built release is wiped and rebuilt, never deployed.
 
+Node is installed into the official archive directory (`node-v24.<minor>.<patch>-linux-<arch>`).
+The `node` link changes only after the extracted executable reports the expected version.
+Before nginx validation, the site, snippet, http config and legacy log-format file are all
+snapshotted. A patch or validation failure restores their prior bytes, including leaving
+previously absent files absent. Only numeric `site.bak-<timestamp>` backups are eligible for
+site restoration; snippet/http snapshots cannot be mistaken for a site file.
+
 The site file is `/etc/nginx/sites-available/grill-me.ai`, enabled as
 `/etc/nginx/sites-enabled/zz-grill-me.ai`. Keep the `zz-` link name: it keeps the other sites as
 the per-port defaults. Never add `default_server`.

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm, writeFile, readFile, utimes } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, access, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,13 +12,23 @@ const LIB = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", 
 const DEPLOY = path.join(LIB, "..");
 // bash (Git Bash) needs POSIX paths for globs; Windows temp paths like C:\… don't expand.
 const toBash = (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`).replace(/\\/g, "/");
-const run = (script, ...args) => promisify(execFile)("bash", [toBash(path.join(LIB, script)), ...args.map(toBash)]);
+// Git Bash's default ln copies directories on Windows. Its emulated symlinks let the fixture
+// exercise Linux-style link creation/readlink without Windows symlink privileges.
+const shell = (...args) => promisify(execFile)("bash", args, { env: { ...process.env, MSYS: "winsymlinks" } });
+const run = (script, ...args) => shell(toBash(path.join(LIB, script)), ...args.map(toBash));
 
 let bash = true;
 try { await promisify(execFile)("bash", ["--version"]); } catch { bash = false; }
 let curl = true;
 try { await promisify(execFile)("curl", ["--version"]); } catch { curl = false; }
 const opts = { skip: !bash && "bash not available" };
+let nodeTools = bash && curl;
+if (nodeTools) {
+  try { await shell("-c", "command -v tar xz sha256sum >/dev/null"); } catch { nodeTools = false; }
+}
+// macOS may have only shasum, rather than the GNU utility the Ubuntu deploy script uses.
+// These tests always run on Linux CI and on the deploy host; do not fake the checksum tool.
+const nodeOpts = { skip: !nodeTools && "Node archive fixtures need bash, curl, tar, xz and sha256sum" };
 
 // The "before" side of deploy/nginx/site-443.patch, with an access_log line to be commented out.
 const BEFORE = `server {
@@ -122,10 +132,112 @@ test("restore-site: restores the newest backup WITHOUT the include", opts, async
   const bakNew = `${site}.bak-20261002000000`, bakOld = `${site}.bak-20261001000000`;
   await writeFile(bakNew, patchedText);
   await writeFile(bakOld, BEFORE);
+  // Old deployers left these newer non-site backups alongside site backups.
+  await writeFile(`${bakNew}.snippet`, "old snippet without an include\n");
+  await writeFile(`${bakNew}.http`, "old http config without an include\n");
   await utimes(bakOld, new Date("2026-10-01"), new Date("2026-10-01"));
   await utimes(bakNew, new Date("2026-10-02"), new Date("2026-10-02"));
   await run("restore-site.sh", site);
   assert.equal(await readFile(site, "utf8"), BEFORE);
+});
+
+async function fixtureDir(t, prefix) {
+  const dir = await mkdtemp(path.join(tmpdir(), prefix));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+async function nodeDistribution(t, { executable = true, missing = false, version = "v24.1.0" } = {}) {
+  const dir = await fixtureDir(t, "grill-me-node-");
+  const dist = path.join(dir, "dist");
+  await mkdir(dist);
+  for (const arch of ["x64", "arm64"]) {
+    const name = `node-v24.1.0-linux-${arch}`;
+    const bin = path.join(dir, name, "bin");
+    await mkdir(bin, { recursive: true });
+    if (!missing) await writeFile(path.join(bin, "node"), `#!/usr/bin/env bash\necho ${version}\n`);
+    // Set the mode in the actual tar header, including on Windows.
+    await shell("-c", 'if [ -f "$2/$3/bin/node" ]; then chmod "$1" "$2/$3/bin/node"; fi; tar -cJf "$2/dist/$3.tar.xz" -C "$2" "$3"; cd "$2/dist"; sha256sum --text "$3.tar.xz" >> SHASUMS256.txt',
+      "fixture", executable ? "755" : "644", toBash(dir), name);
+  }
+  return { dir, dist, opt: path.join(dir, "opt") };
+}
+
+for (const arch of ["x64", "arm64"]) {
+  test(`install-node: official ${arch} archive layout, executable link, repeat without re-download`, nodeOpts, async (t) => {
+    const { dist, opt } = await nodeDistribution(t);
+    await run("install-node.sh", opt, arch, pathToFileURL(dist).href);
+    const { stdout } = await shell("-c", 'readlink "$1/node"; "$1/node/bin/node" --version', "fixture", toBash(opt));
+    assert.equal(stdout, `${toBash(opt)}/node-v24.1.0-linux-${arch}\nv24.1.0\n`);
+    await rm(path.join(dist, `node-v24.1.0-linux-${arch}.tar.xz`));
+    const again = await run("install-node.sh", opt, arch, pathToFileURL(dist).href);
+    assert.match(again.stdout, /already current/);
+  });
+}
+
+for (const [label, options] of [["missing binary", { missing: true }], ["not executable", { executable: false }], ["wrong version", { version: "v22.0.0" }]]) {
+  test(`install-node: ${label} cannot replace the previous link`, nodeOpts, async (t) => {
+    if (process.platform === "win32" && options.executable === false) return t.skip("Git Bash ignores POSIX execute bits; covered on Linux/macOS");
+    const { dist, opt } = await nodeDistribution(t, options);
+    await mkdir(path.join(opt, "previous"), { recursive: true });
+    await shell("-c", 'ln -s "$1/previous" "$1/node"', "fixture", toBash(opt));
+    await assert.rejects(run("install-node.sh", opt, "x64", pathToFileURL(dist).href), /not executable or reports the wrong version/);
+    assert.equal((await shell("-c", 'readlink "$1/node"', "fixture", toBash(opt))).stdout, `${toBash(opt)}/previous\n`);
+  });
+}
+
+async function nginxFixture(t, { present = true, site = BEFORE, patchFailure = false, valid = false } = {}) {
+  const dir = await fixtureDir(t, "grill-me-nginx-");
+  const release = path.join(dir, "release");
+  await cp(DEPLOY, path.join(release, "deploy"), { recursive: true });
+  if (patchFailure) await writeFile(path.join(release, "deploy/lib/patch-site.sh"), '#!/usr/bin/env bash\necho broken > "$1"\nexit 7\n');
+  const bin = path.join(dir, "bin");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "nginx"), `#!/usr/bin/env bash\n[ "$1" = -t ] || exit 99\nprintf validated > "${toBash(dir)}/validated"\nexit ${valid ? 0 : 1}\n`);
+  await shell("-c", 'chmod +x "$1/nginx"', "fixture", toBash(bin));
+  const files = ["site", "snippet", "http", "legacy"].map((n) => path.join(dir, n));
+  const before = [Buffer.from(site), ...["snippet", "http", "legacy"].map((s) => present ? Buffer.from(`prior ${s}\n\n# retained bytes\n`) : null)];
+  for (let i = 0; i < files.length; i++) if (before[i]) await writeFile(files[i], before[i]);
+  const configure = () => shell("-c", 'PATH="$1:$PATH" bash "$2" "${@:3}"', "fixture", toBash(bin),
+    toBash(path.join(LIB, "configure-nginx.sh")), toBash(release), ...files.map(toBash));
+  const assertRestored = async () => {
+    for (let i = 0; i < files.length; i++) {
+      if (before[i]) assert.deepEqual(await readFile(files[i]), before[i], files[i]);
+      else await assert.rejects(access(files[i]), { code: "ENOENT" });
+    }
+  };
+  return { dir, files, configure, assertRestored };
+}
+
+for (const present of [true, false]) {
+  test(`configure-nginx: failed nginx -t restores prior bytes and ${present ? "existing" : "absent first-install"} files`, opts, async (t) => {
+    const f = await nginxFixture(t, { present });
+    await assert.rejects(f.configure());
+    await access(path.join(f.dir, "validated")); // We reached the validation, after real patching.
+    await f.assertRestored();
+  });
+}
+
+for (const [label, options] of [
+  ["patch failure", { patchFailure: true }],
+  ["no matching 443 block", { site: REDIRECT }],
+  ["pre-existing duplicate includes", { site: BEFORE + INCLUDE + "\n" + INCLUDE + "\n" }],
+]) {
+  test(`configure-nginx: ${label} restores every file before validation`, opts, async (t) => {
+    const f = await nginxFixture(t, options);
+    await assert.rejects(f.configure());
+    await assert.rejects(access(path.join(f.dir, "validated")), { code: "ENOENT" });
+    await f.assertRestored();
+  });
+}
+
+test("configure-nginx: valid config commits the real patch, snippet and http config, removes legacy", opts, async (t) => {
+  const f = await nginxFixture(t, { valid: true });
+  await f.configure();
+  assert.match(await readFile(f.files[0], "utf8"), /include \/etc\/nginx\/snippets\/grill-me.ai-locations.conf;/);
+  assert.deepEqual(await readFile(f.files[1]), await readFile(path.join(DEPLOY, "nginx/grill-me.ai-locations.conf")));
+  assert.deepEqual(await readFile(f.files[2]), await readFile(path.join(DEPLOY, "nginx/grill-me-http.conf")));
+  await assert.rejects(access(f.files[3]), { code: "ENOENT" });
 });
 
 test("restore-site: without a clean backup, strips the include and puts location / back", opts, async (t) => {
