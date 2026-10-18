@@ -12,7 +12,7 @@ It's a free, open-source taster for Agent Hub: the same grill UI, without accoun
 - **End-to-end encrypted.** The server stores only encrypted data, and the key never reaches it.
 - **Kept only as long as needed.** A grill is deleted once the agent has its answers, and an unanswered grill
   after about an hour.
-- **No accounts and no setup.** `npx grill-me`, a Claude Code plugin, or an MCP server.
+- **No accounts and no setup.** `npx grill-me-ai`, a Claude Code plugin, or an MCP server.
 - **Any question format in, one internal format out.**
 - **Cheap to run.** One small Node server.
 
@@ -47,7 +47,7 @@ DELETE ────────────────────────�
 - Anyone with the full link can read and answer the grill. Anyone with only the `id` gets encrypted data they
   can't read, and can't post answers.
 
-## Internal format (`grill-me/core`)
+## Internal format (`grill-me-ai/core`)
 
 ```jsonc
 // Grill: what gets encrypted and uploaded
@@ -129,7 +129,7 @@ only 22, 80 and 443.
   2. Fetch and decrypt the grill. Save the plaintext and swipe progress to localStorage, keyed by a SHA-256
      of the grill's content. A grill re-sent with the same questions resumes where you stopped. Local copies
      expire after 3 days, as on the hub's grill page.
-- Cards: the hub's grill page, extracted into `grill-me/ui`. Swipe right agrees with ➡️, choice chips pick a
+- Cards: the hub's grill page, extracted into `grill-me-ai/ui`. Swipe right agrees with ➡️, choice chips pick a
   choice, swipe left types your own answer, and skip. It's identical on phone and desktop. Agent Hub uses the
   same package.
 - **Send** encrypts and posts the answers. Then the done screen shows:
@@ -146,7 +146,7 @@ only 22, 80 and 443.
   - All agent text goes in through `textContent`. Only `**bold**` and `` `code` `` are rendered, and links are
     never clickable, so the domain can't be used for phishing.
 
-## Agent side (`packages/cli` → npm `grill-me`)
+## Agent side (`packages/cli` → npm `grill-me-ai`, command `grill-me`)
 
 | Command | What it does |
 |---|---|
@@ -182,8 +182,8 @@ The plugin contains the `grill-me` skill and an `.mcp.json` for the MCP tools. T
 
 1. When you have 2+ questions for the user, write them in the grill text format. Show them in your reply as
    usual, so answering in the terminal still works.
-2. Run `npx grill-me send`. Put the link and the QR (in a code block) in your reply.
-3. Run `npx grill-me wait <id>` **as a background command** and end your turn. Claude Code wakes you when it
+2. Run `npx grill-me-ai send`. Put the link and the QR (in a code block) in your reply.
+3. Run `npx grill-me-ai wait <id>` **as a background command** and end your turn. Claude Code wakes you when it
    exits, with the answers as its output.
 4. If the user answers in the terminal first, stop the background wait and run `grill-me cancel <id>`.
 5. Map each status to the wording above.
@@ -193,30 +193,30 @@ Outside Claude Code, the skill uses `grill_send` and `grill_wait` instead.
 ## Repo layout
 
 ```
-packages/core     grill-me/core     format, converters, crypto, answer lines (browser + Node, no deps)
-packages/ui       grill-me/ui       swipe cards (framework-free ES module + CSS), also used by Agent Hub
+packages/core     grill-me-ai/core  format, converters, crypto, answer lines (browser + Node, no deps)
+packages/ui       grill-me-ai/ui    swipe cards (framework-free ES module + CSS), also used by Agent Hub
 packages/server   private           API + static page
-packages/cli      grill-me          CLI + MCP server
+packages/cli      grill-me-ai       CLI + MCP server (the installed command is `grill-me`)
 plugin/           Claude Code plugin: skill + .mcp.json
 ```
 
 npm workspaces, Node 24 LTS, ES modules, tests run with `node --test`.
 
-Published to npm as **one package, `grill-me`**: the CLI and MCP server, plus subpath exports `grill-me/core`
-and `grill-me/ui`, which Agent Hub imports. `packages/core` and `packages/ui` are workspaces bundled into it,
+Published to npm as **one package, `grill-me-ai`**: the CLI and MCP server, plus subpath exports `grill-me-ai/core`
+and `grill-me-ai/ui`, which Agent Hub imports. `packages/core` and `packages/ui` are workspaces bundled into it,
 not separate npm packages.
 
 ## Milestones
 
 1. **core**: the format, converters (with the hub's grill fixtures), crypto and answer lines, all tested.
-2. **server + page**: `grill-me/ui` extracted from the hub's grill page in `public/index.html`, deployed to
+2. **server + page**: `grill-me-ai/ui` extracted from the hub's grill page in `public/index.html`, deployed to
    grill-me.ai.
 3. **CLI + skill**: Claude Code end to end. **Test early** that a QR printed in a code block in a Claude Code
    reply scans; if it doesn't, fall back to the link only, plus a QR on desktop via a `/qr/<id>` page.
 4. **MCP server** for Codex.
-5. **Agent Hub** switches its grill page to `grill-me/ui` and `grill-me/core`.
+5. **Agent Hub** switches its grill page to `grill-me-ai/ui` and `grill-me-ai/core`.
 
 ## Open questions
 
-None left. Decided: MIT license; one npm package `grill-me`; hosted on the existing DigitalOcean server. The
+None left. Decided: MIT license; one npm package `grill-me-ai` (`grill-me` was refused as too close to the existing `grillme`); hosted on the existing DigitalOcean server. The
 Agent Hub waitlist comes later; until then the done screen links to a placeholder.
