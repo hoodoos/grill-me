@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grill Me — stats</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/stats/stats.css">
+<script type="module" src="/stats/stats.js"></script>
+</head>
+<body>
+<main class="wrap">
+  <h1>Grill Me stats</h1>
+  <p class="meta" id="generated"></p>
+
+  <h2>Live</h2>
+  <div id="live" class="cards"></div>
+  <h3>Requests per minute (last 15 min)</h3>
+  <div id="minutes" class="bars"></div>
+
+  <h2>Funnel per day (last 30 days)</h2>
+  <div class="scroll"><table id="funnel"></table></div>
+
+  <h2>Time to open / to answer</h2>
+  <div class="twocol"><div id="tto"></div><div id="tta"></div></div>
+
+  <h2>Agents / CLI versions / sizes / question counts (last 30 days)</h2>
+  <div class="twocol">
+    <div id="agents"></div>
+    <div id="versions"></div>
+    <div id="sizes"></div>
+    <div id="questions"></div>
+  </div>
+</main>
+</body>
+</html>
