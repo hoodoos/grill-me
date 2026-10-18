@@ -1,0 +1,7 @@
+# Grill Me
+
+> Grill Me turns your agent's questions into swipe cards on your phone; the answers go straight back into the agent's session, end-to-end encrypted.
+
+## Install
+
+- [Install Grill Me](https://grill-me.ai/install): the install guide for AI agents
