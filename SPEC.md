@@ -133,8 +133,9 @@ static page; `/api/*` bypasses the cache.
 - **Send** encrypts and posts the answers. Then the done screen shows:
   - "Sent ✓ Your agent has your answers." Once the grill has been deleted, it changes to "picked up".
   - A **Copy answers** button: the `Q<n> - …` lines.
-  - The Agent Hub line: *"Get grills pushed to your phone, even when your agent isn't running → Agent Hub"*,
-    linking to the waitlist on Agent Hub's own site. grill-me.ai never collects emails.
+  - The Agent Hub line: *"Get grills pushed to your phone, even when your agent isn't running → Agent Hub"*.
+    For now it links to a static "coming soon" page at `grill-me.ai/hub`. A real waitlist comes later, on
+    Agent Hub's own site, so grill-me.ai never collects emails.
 - **Offline or expired.** The page still has the grill in localStorage, so you can finish swiping and use
   **Copy answers**.
 - **Security.**
@@ -211,7 +212,7 @@ npm workspaces, Node 24 LTS, ES modules, tests run with `node --test`.
 
 ## Open questions
 
-- **License**: MIT or Apache-2.0.
-- **npm names**: are `grill-me` and the `@grill-me` scope free?
-- **VPS provider and region.**
-- **Agent Hub waitlist URL** for the done screen.
+- **npm packaging**: one `grill-me` package with subpath exports, or an `@grill-me` scope.
+- **Host machine**: which existing machine runs the server, and how it's exposed to the internet.
+
+Decided: MIT license. The Agent Hub waitlist comes later; until then the done screen links to a placeholder.
