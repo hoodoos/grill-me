@@ -109,6 +109,21 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
         scroll.append(body);
       }
     }
+    // Single-choice descriptions are reading/swiping space, separate from the compact
+    // answer controls. Never put that body text inside an excluded button hit target.
+    if (!q.multi && q.choices.some((c) => c.detail)) {
+      const context = el("ul", "gm-choice-context");
+      for (const c of q.choices) {
+        if (!c.detail) continue;
+        const item = el("li");
+        item.append(el("strong", "", c.name), doc.createTextNode(" — "));
+        const detail = el("span", "gm-choice-detail gm-md");
+        renderText(detail, c.detail);
+        item.append(detail);
+        context.append(item);
+      }
+      scroll.append(context);
+    }
     if (q.recommend) {
       const rec = el("div", "gm-rec");
       rec.append(el("div", "gm-rec-h", "➡️ Recommended"));
@@ -130,13 +145,12 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
       q.choices.forEach((c) => {
         const picked = a?.kind === "choice" && (Array.isArray(a.choice) ? a.choice : [a.choice]).some((n) => n.toLowerCase() === c.name.toLowerCase());
         const isOn = q.multi ? multiPicked.has(c.name) : picked;
-        // A choice with a detail is a tappable row (bold name, muted detail); without one, a compact chip.
-        const b = el("button", c.detail ? "gm-choice" : "gm-chip");
+        const b = el("button", q.multi && c.detail ? "gm-choice" : "gm-chip");
         b.type = "button";
         if (isOn) b.classList.add("on");
         const name = el("span", "gm-choice-name", (isRec(c) ? "➡️ " : "") + c.name);
         b.append(name);
-        if (c.detail) b.append(el("span", "gm-choice-detail", c.detail));
+        if (q.multi && c.detail) b.append(el("span", "gm-choice-detail", c.detail));
         b.addEventListener("click", () => {
           if (q.multi) {
             if (multiPicked.has(c.name)) multiPicked.delete(c.name);

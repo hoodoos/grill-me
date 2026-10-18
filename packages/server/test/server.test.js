@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { createServer } from "../src/server.js";
 import {
@@ -217,14 +218,17 @@ test("long poll: no wait → 204; a wait is woken by the answers", async () => {
   await close();
 });
 
-test("long poll: a timeout answers 204", async () => {
+test("long poll: a timeout answers 204", async (t) => {
   const { base, close } = await start({ maxWaitS: 1 });
-  const { id } = await createGrill(base);
-  const t0 = Date.now();
-  const w = await fetch(`${base}/api/g/${id}/answers?wait=1`);
-  assert.equal(w.status, 204);
-  assert.ok(Date.now() - t0 >= 900);
-  await close();
+  try {
+    const { id } = await createGrill(base);
+    const t0 = performance.now();
+    const w = await fetch(`${base}/api/g/${id}/answers?wait=1`);
+    const elapsed = performance.now() - t0;
+    t.diagnostic(`long poll elapsed ${elapsed.toFixed(3)} ms (monotonic; minimum 900 ms)`);
+    assert.equal(w.status, 204);
+    assert.ok(elapsed >= 900, `long poll returned after ${elapsed.toFixed(3)} ms; expected at least 900 ms`);
+  } finally { await close(); }
 });
 
 test("long poll: more than 3 waiters per grill → 429; a disconnected waiter frees its slot", async () => {
