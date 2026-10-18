@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { send, wait, check, resend, cancel } from "./index.js";
+import { isId } from "../../core/src/index.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -25,11 +26,12 @@ send reads stdin when no file is given and stdin isn't a terminal.`;
 class UsageError extends Error {}
 
 function parse(argv, options, { min = 0, max = 1 } = {}) {
-  // Grill ids can start with '-'; no command has short options, so a single-dash
-  // token is always an id — pull it out before parseArgs rejects it as an option.
+  // Grill ids can start with '-' or '--', which parseArgs would reject as unknown
+  // options. The id shape (16 canonical base64url chars) matches no option name
+  // or value, so pull the id out before parseArgs runs.
   const args = [...argv];
-  const dash = args.findIndex((a) => /^-[^-]/.test(a));
-  const id = dash === -1 ? undefined : args.splice(dash, 1)[0];
+  const at = args.findIndex(isId);
+  const id = at === -1 ? undefined : args.splice(at, 1)[0];
   let parsed;
   try {
     parsed = parseArgs({ args, options, allowPositionals: true, strict: true });
