@@ -38,7 +38,7 @@ test("the packed tarball installs and works", { skip: !!process.env.GRILL_ME_SKI
 
   const bin = path.join(tmp, "node_modules", ".bin", process.platform === "win32" ? "grill-me.cmd" : "grill-me");
   const version = sh(bin, ["--version"], { cwd: tmp, shell: true });
-  assert.equal(version, "0.2.0");
+  assert.equal(version, "0.1.0");
 
   const check = sh(process.execPath, [
     "--input-type=module",

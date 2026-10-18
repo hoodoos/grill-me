@@ -53,7 +53,7 @@ const sentId = (stdout) => /^id: ([A-Za-z0-9_-]{16})$/m.exec(stdout)?.[1];
 test("--version and --help", async (t) => {
   const { home } = await fixture(t);
   const v = await run(["--version"], { home });
-  assert.equal(v.stdout.trim(), "0.2.0");
+  assert.equal(v.stdout.trim(), "0.1.0");
   assert.equal(v.code, 0);
 
   const h = await run(["--help"], { home });
