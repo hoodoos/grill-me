@@ -239,7 +239,7 @@ screen, sent versus picked-up state, Copy answers, local-mode privacy/key handli
 standalone localStorage progress/resume/expiry behavior. These need their own acceptance;
 they are not proof of card interaction parity or grounds to call the whole UI identical.
 The safety renderer intentionally stays limited to bold/code and plain, non-clickable
-URLs. Matching Hub's unsafe/full HTML or link Markdown rendering is **not** an acceptance
+URLs. Matching Hub's broader Markdown and clickable-link rendering is **not** an acceptance
 requirement; preserve the safe renderer while comparing layout and interaction.
 
 The Hub baseline is read-only: **no Hub changes** for this work. Keep the baseline harness,
@@ -262,4 +262,4 @@ baseline without copying it into the repository.
 Redact full grill links, QR contents, URL fragments and keys from reports/screenshots.
 No credentials are needed for these acceptance tests. npm token delivery is a separate
 publish process: never put an npm token or `STATS_TOKEN` in a phone grill, WebFetch prompt,
-transcript or this document. Release remains held until the required review gates pass.
+test transcript or this document. Release remains held until the required review gates pass.
