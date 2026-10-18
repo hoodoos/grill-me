@@ -40,6 +40,7 @@ command = "npx"
 args = ["-y", "grill-me-ai", "mcp"]
 startup_timeout_sec = 60
 tool_timeout_sec = 900
+default_tools_approval_mode = "approve"
 env = { GRILL_ME_WAIT_SECONDS = "840" }
 ```
 
