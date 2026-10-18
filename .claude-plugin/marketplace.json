@@ -1,0 +1,13 @@
+{
+  "name": "grill-me",
+  "owner": {
+    "name": "hoodoos"
+  },
+  "plugins": [
+    {
+      "name": "grill-me",
+      "source": "./plugin",
+      "description": "Ask the user questions as swipe cards on their phone, end-to-end encrypted. Answers land back in the session."
+    }
+  ]
+}
