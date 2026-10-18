@@ -98,7 +98,10 @@ else
 fi
 SHORT=${SHA:0:12}
 REL="$OPT/releases/$SHORT"
-if [ ! -d "$REL" ]; then
+# .release-sha is the completion marker, written last: a half-built release folder (npm ci, the
+# tests or build-static died midway) is wiped and rebuilt instead of being deployed.
+if [ ! -f "$REL/.release-sha" ]; then
+  rm -rf "$REL"
   if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
     git clone --quiet --depth 1 "$REPO" "$REL"
     git -C "$REL" fetch --quiet --depth 1 origin "$SHA"

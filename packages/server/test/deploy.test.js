@@ -143,3 +143,9 @@ test("deploy.sh accepts a full 40-hex sha as the ref", async () => {
   // The final checks come from the release, not the operator's clone.
   assert.match(src, /bash "\$REL\/deploy\/check\.sh"/);
 });
+
+test("deploy.sh treats a release as built only when .release-sha exists", async () => {
+  const src = (await readFile(path.join(DEPLOY, "deploy.sh"), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(src, /if \[ ! -f "\$REL\/\.release-sha" \]; then/, "keys on .release-sha, not the folder");
+  assert.match(src, /rm -rf "\$REL"/, "a half-built release is wiped and rebuilt");
+});

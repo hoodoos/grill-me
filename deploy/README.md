@@ -22,6 +22,9 @@ never restarts nginx (only `nginx -t` + `systemctl reload nginx`).
    and ends with the release's own `check.sh`.
 2. If checks fail on a new release: `bash rollback.sh`.
 
+If the tests (or `npm ci`, or the static build) fail during a deploy, just run `deploy.sh` again:
+`.release-sha` is written last, so a half-built release is wiped and rebuilt, never deployed.
+
 The site file is `/etc/nginx/sites-available/grill-me.ai`, enabled as
 `/etc/nginx/sites-enabled/zz-grill-me.ai`. Keep the `zz-` link name: it keeps the other sites as
 the per-port defaults. Never add `default_server`.
