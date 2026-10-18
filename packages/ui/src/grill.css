@@ -22,7 +22,10 @@
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .gm-root button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 5px 10px; cursor: pointer; }
-.gm-root button:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .gm-root button:hover { border-color: var(--accent); }
+}
+.gm-root button, .gm-root a, .gm-root summary { touch-action: manipulation; }
 .gm-root button:disabled { opacity: .5; cursor: default; }
 .gm-root .gm-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .gm-root textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; }
