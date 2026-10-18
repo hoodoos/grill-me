@@ -2,7 +2,7 @@
 
 Your coding agent has questions. Grill Me turns them into swipe cards on your phone. Your answers
 go straight back into the agent's session, and **grill-me.ai can't read any of it** (in local mode;
-app mode for claude.ai and ChatGPT encrypts on our server in memory and never stores anything
+the hosted connector for claude.ai encrypts in memory on our server and never stores anything
 readable).
 
 It's a free, open-source taster for Agent Hub: the same grill UI, without accounts.
