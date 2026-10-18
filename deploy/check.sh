@@ -23,10 +23,14 @@ check() { # name command...
 RID=$("$NODE" -e 'console.log(require("crypto").randomBytes(12).toString("base64url"))' 2>/dev/null)
 
 # ---------- the site ----------
-url_check() { # path expected-status expected-content-type-prefix
-  local path="$1" want="$2" ctype="$3"
+# Since phase 3, curl's defaults negotiate / to the markdown guide, so the homepage check must
+# ask like a browser.
+CHROME_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+CHROME_ACCEPT='text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+url_check() { # path expected-status expected-content-type-prefix [extra curl args...]
+  local path="$1" want="$2" ctype="$3"; shift 3
   local hdrs code
-  hdrs=$(curl -sS -m 15 -D - -o /dev/null "$BASE$path") || { fail "GET $path (request failed)"; return; }
+  hdrs=$(curl -sS -m 15 -D - -o /dev/null "$@" "$BASE$path") || { fail "GET $path (request failed)"; return; }
   code=$(head -1 <<<"$hdrs" | awk '{print $2}')
   [ "$code" = "$want" ] || { fail "GET $path → $code, want $want"; return; }
   if [ -n "$ctype" ] && ! grep -qi "^content-type: $ctype" <<<"$hdrs"; then fail "GET $path content-type"; return; fi
@@ -35,7 +39,7 @@ url_check() { # path expected-status expected-content-type-prefix
   done
   pass "GET $path → $code"
 }
-url_check / 200 "text/html"
+url_check / 200 "text/html" -H "Accept: $CHROME_ACCEPT" -A "$CHROME_UA"
 url_check /demo 200 "text/html"
 url_check /hub 200 "text/html"
 url_check /ui/grill.js 200 "text/javascript"
@@ -44,7 +48,8 @@ url_check "/g/$RID" 200 "text/html"
 
 hdrs=$(curl -sS -m 15 -D - -o /dev/null "$BASE/api/g/$RID")
 code=$(head -1 <<<"$hdrs" | awk '{print $2}')
-if [ "$code" = "404" ] && grep -qi '^content-type: application/json' <<<"$hdrs"; then pass "GET /api/g/<random> → 404 JSON"; else fail "GET /api/g/<random> → $code"; fi
+# The 404 is an empty body ("JSON or empty" per the API rules), so there's no content-type.
+[ "$code" = "404" ] && pass "GET /api/g/<random> → 404" || fail "GET /api/g/<random> → $code"
 
 # /healthz (public), /go/hub (counted redirect), /stats (private)
 body=$(curl -sS -m 15 "$BASE/healthz")
@@ -73,8 +78,6 @@ GUIDE="$(cat "$HERE/../site/install.md" 2>/dev/null || true)"
 body=$(curl -sS -m 15 "$BASE/" || true) # curl's defaults: UA curl/*, Accept */*
 if [ -n "$GUIDE" ] && [ "$body" = "$GUIDE" ]; then pass "GET / (curl defaults) → the guide"; else fail "GET / (curl defaults) → the guide"; fi
 
-CHROME_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-CHROME_ACCEPT='text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
 body=$(curl -sS -m 15 -H "Accept: $CHROME_ACCEPT" -A "$CHROME_UA" "$BASE/" || true)
 ctype=$(curl -sS -m 15 -o /dev/null -w '%{content_type}' -H "Accept: $CHROME_ACCEPT" -A "$CHROME_UA" "$BASE/" || true)
 if [[ "$body" == *"<html"* && "$ctype" == text/html* ]]; then pass "GET / (browser) → HTML"; else fail "GET / (browser) → HTML"; fi

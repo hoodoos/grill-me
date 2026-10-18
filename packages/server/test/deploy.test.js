@@ -5,7 +5,8 @@ import { promisify } from "node:util";
 import { mkdtemp, rm, writeFile, readFile, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createServer } from "../src/server.js";
 
 const LIB = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "deploy", "lib");
 const DEPLOY = path.join(LIB, "..");
@@ -15,6 +16,8 @@ const run = (script, ...args) => promisify(execFile)("bash", [toBash(path.join(L
 
 let bash = true;
 try { await promisify(execFile)("bash", ["--version"]); } catch { bash = false; }
+let curl = true;
+try { await promisify(execFile)("curl", ["--version"]); } catch { curl = false; }
 const opts = { skip: !bash && "bash not available" };
 
 // The "before" side of deploy/nginx/site-443.patch, with an access_log line to be commented out.
@@ -148,4 +151,37 @@ test("deploy.sh treats a release as built only when .release-sha exists", async 
   const src = (await readFile(path.join(DEPLOY, "deploy.sh"), "utf8")).replace(/\r\n/g, "\n");
   assert.match(src, /if \[ ! -f "\$REL\/\.release-sha" \]; then/, "keys on .release-sha, not the folder");
   assert.match(src, /rm -rf "\$REL"/, "a half-built release is wiped and rebuilt");
+});
+
+// The real check.sh against the real Node server, so a live check that can't work (e.g. one
+// still assuming / is always HTML) fails here instead of on the production deploy.
+test("check.sh passes against a real local server", async (t) => {
+  if (!bash || !curl) return t.skip("bash or curl not available");
+  const token = "test-stats-token-0f8b1c2d3e4f5a6b7c8d9e0f"; // >= 32 chars turns /stats on
+  const { server, close } = createServer({ db: ":memory:", statsToken: token });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => close());
+  const port = server.address().port;
+
+  // check-live.mjs with a short hold, through check.sh's CHECK_LIVE override.
+  const dir = await mkdtemp(path.join(tmpdir(), "grill-me-check-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const wrapper = path.join(dir, "check-live.mjs");
+  const real = pathToFileURL(path.join(DEPLOY, "..", "packages", "server", "scripts", "check-live.mjs")).href;
+  await writeFile(wrapper, `process.argv.push("--wait", "3");\nawait import(${JSON.stringify(real)});\n`);
+
+  const env = {
+    ...process.env,
+    BASE: `http://127.0.0.1:${port}`,
+    GRILL_ME_NODE: toBash(process.execPath),
+    STATS_TOKEN: token,
+    CHECK_LIVE: toBash(wrapper),
+  };
+  try {
+    const { stdout } = await promisify(execFile)(
+      "bash", [toBash(path.join(DEPLOY, "check.sh")), toBash(path.join(dir, "no-such-snapshot"))], { env });
+    assert.match(stdout, /ALL CHECKS PASSED/);
+  } catch (e) {
+    assert.fail(`check.sh failed:\n${e.stdout}\n${e.stderr}`);
+  }
 });
