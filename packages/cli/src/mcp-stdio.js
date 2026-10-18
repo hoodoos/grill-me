@@ -14,11 +14,12 @@ const INSTRUCTIONS =
 
 // GRILL_ME_WAIT_SECONDS is both the default and, when set, the cap: each client sets it to fit
 // its tool time limit (Desktop 180 < 240 s, Codex 840 < 900), so a larger `seconds` must not
-// exceed it. Without the env the cap is 900. A non-numeric `seconds` falls back to the default.
+// exceed it. The default never exceeds the local cap of 900. A non-numeric `seconds` falls back
+// to the default.
 const waitConfig = (env) => {
   const fromEnv = Number(env.GRILL_ME_WAIT_SECONDS);
   const envValid = Number.isFinite(fromEnv) && fromEnv > 0;
-  const def = envValid ? Math.floor(fromEnv) : 45;
+  const def = envValid ? Math.min(Math.floor(fromEnv), 900) : 45;
   return { default: def, max: envValid ? def : 900 };
 };
 

@@ -213,3 +213,10 @@ test("without GRILL_ME_WAIT_SECONDS the description keeps the built-in numbers",
   const wait = list.result.tools.find((x) => x.name === "grill_wait");
   assert.match(wait.inputSchema.properties.seconds.description, /\(default 45, max 900\)/);
 });
+
+test("an env value above 900 clamps to the local cap", async (t) => {
+  const { mcp } = await fixture(t, { env: { GRILL_ME_WAIT_SECONDS: "2000" } });
+  const list = await mcp.request("tools/list");
+  const wait = list.result.tools.find((x) => x.name === "grill_wait");
+  assert.match(wait.inputSchema.properties.seconds.description, /\(default 900, max 900\)/);
+});
