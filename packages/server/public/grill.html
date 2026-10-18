@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Grill Me</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/ui/grill.css">
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<main id="layout">
+  <section id="screen-message" class="page" hidden>
+    <p id="message-text"></p>
+    <p class="meta"><a href="/">Grill Me</a></p>
+  </section>
+
+  <section id="screen-grill" hidden>
+    <div id="grill-root"></div>
+    <div id="grill-footer"><button id="copy-answers" type="button">Copy answers</button></div>
+  </section>
+
+  <section id="screen-done" class="page" hidden>
+    <h1 id="done-title">Sent ✓</h1>
+    <p id="done-text">Your agent has your answers.</p>
+    <pre id="done-lines" hidden></pre>
+    <p><button id="done-copy" type="button">Copy answers</button></p>
+    <p class="meta">Get grills pushed to your phone, even when your agent isn't running → <a href="/hub">Agent Hub</a></p>
+  </section>
+
+  <!-- Reserved slot: a later desktop "scan this with your phone" QR panel renders here.
+       app.js has a matching renderSidePanel() hook; adding the panel touches nothing else. -->
+  <aside id="side-panel" hidden></aside>
+</main>
+</body>
+</html>
