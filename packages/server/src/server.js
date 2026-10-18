@@ -101,7 +101,8 @@ export function createServer(options = {}) {
   const qGet = dbh.prepare("SELECT * FROM grills WHERE id = ?");
   const qInsert = dbh.prepare("INSERT INTO grills(id, ct, iv, write_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)");
   const qOpened = dbh.prepare("UPDATE grills SET opened_at = ? WHERE id = ? AND opened_at IS NULL");
-  const qAnswer = dbh.prepare("UPDATE grills SET ans_ct = ?, ans_iv = ?, expires_at = ? WHERE id = ?");
+  const qAnswer = dbh.prepare(`UPDATE grills SET ans_ct = ?, ans_iv = ?, expires_at = ?
+    WHERE id = ? AND ans_ct IS NULL AND expires_at > ? AND write_hash = ?`);
   const qDelete = dbh.prepare("DELETE FROM grills WHERE id = ?");
   const qExpired = dbh.prepare("SELECT id, ans_ct FROM grills WHERE expires_at <= ?");
   const qStat = dbh.prepare(`INSERT INTO stats(day, name, bucket, count) VALUES (?, ?, ?, 1)
@@ -447,9 +448,16 @@ export function createServer(options = {}) {
     const authRes = await auth(req, row);
     if (authRes === 401) return sendJson(res, 401, { error: "missing or malformed Authorization header" });
     if (authRes === 403) return sendJson(res, 403, { error: "wrong write token" });
-    if (row.ans_ct !== null) return sendJson(res, 409, { error: "already answered" });
     // Answered grills live ttlMs past the answer, so an answer at minute 59 isn't lost.
-    qAnswer.run(ct, iv, now() + ttlMs, id);
+    // Authentication awaits crypto: another request may answer, delete or replace the row.
+    // Only the live, unanswered row authenticated above may win this synchronous write.
+    const answeredAt = now();
+    if (!qAnswer.run(ct, iv, answeredAt + ttlMs, id, answeredAt, row.write_hash).changes) {
+      const current = liveRow(id);
+      if (!current) return sendEmpty(res, 404);
+      if (!tokenEq(current.write_hash, row.write_hash)) return sendJson(res, 403, { error: "wrong write token" });
+      return sendJson(res, 409, { error: "already answered" });
+    }
     stat("answered");
     stat("time_to_answer", timeBucket(now() - row.created_at));
     wake(id, 200, { ct, iv });
@@ -485,8 +493,13 @@ export function createServer(options = {}) {
     const authRes = await auth(req, row);
     if (authRes === 401) return sendJson(res, 401, { error: "missing or malformed Authorization header" });
     if (authRes === 403) return sendJson(res, 403, { error: "wrong write token" });
-    qDelete.run(id);
-    stat(row.ans_ct === null ? "cancelled" : "picked_up");
+    // Refresh after async auth, then check/delete/count without another await. This also
+    // classifies a newly answered grill correctly and refuses a same-id replacement.
+    const current = liveRow(id);
+    if (!current) return sendEmpty(res, 404);
+    if (!tokenEq(current.write_hash, row.write_hash)) return sendJson(res, 403, { error: "wrong write token" });
+    if (!qDelete.run(id).changes) return sendEmpty(res, 404);
+    stat(current.ans_ct === null ? "cancelled" : "picked_up");
     wake(id, 404, { error: "gone" });
     sendEmpty(res, 204);
   };
