@@ -25,12 +25,13 @@ send reads stdin when no file is given and stdin isn't a terminal.`;
 
 class UsageError extends Error {}
 
-function parse(argv, options, { min = 0, max = 1 } = {}) {
+function parse(argv, options, { min = 0, max = 1, takesId = false } = {}) {
   // Grill ids can start with '-' or '--', which parseArgs would reject as unknown
   // options. The id shape (16 canonical base64url chars) matches no option name
-  // or value, so pull the id out before parseArgs runs.
+  // or value, so pull the id out before parseArgs runs — but only for the commands
+  // that take an id; for send, a 16-character file name is a file, not an id.
   const args = [...argv];
-  const at = args.findIndex(isId);
+  const at = takesId ? args.findIndex(isId) : -1;
   const id = at === -1 ? undefined : args.splice(at, 1)[0];
   let parsed;
   try {
@@ -115,7 +116,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
 
       case "wait":
       case "fetch": {
-        const { values, positionals } = parse(rest, { ...serverOpt });
+        const { values, positionals } = parse(rest, { ...serverOpt }, { takesId: true });
         const [id] = positionals;
         const result = await (cmd === "wait" ? wait(id, { server: values.server }) : check(id, { server: values.server }));
         switch (result.status) {
@@ -142,7 +143,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
           qr: { type: "string" },
           json: { type: "boolean" },
           ...serverOpt,
-        });
+        }, { takesId: true });
         if (values.qr !== undefined && !["dark", "light", "off"].includes(values.qr)) {
           throw new UsageError("--qr must be dark, light or off");
         }
@@ -154,7 +155,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
       }
 
       case "cancel": {
-        const { values, positionals } = parse(rest, { ...serverOpt });
+        const { values, positionals } = parse(rest, { ...serverOpt }, { takesId: true });
         const [id] = positionals;
         await cancel(id, { server: values.server });
         out(`Cancelled ${id}.`);

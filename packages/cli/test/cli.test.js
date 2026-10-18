@@ -11,11 +11,12 @@ import { phoneAnswer } from "./phone.js";
 
 const BIN = fileURLToPath(new URL("../bin/grill-me.js", import.meta.url));
 
-function run(args, { input, inputChunks, home, server } = {}) {
+function run(args, { input, inputChunks, home, server, cwd } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN, ...args, ...(server ? ["--server", server] : [])], {
       env: { ...process.env, GRILL_ME_HOME: home },
       stdio: ["pipe", "pipe", "pipe"],
+      ...(cwd ? { cwd } : {}),
     });
     let stdout = "";
     let stderr = "";
@@ -214,4 +215,15 @@ test("send with >64 KB of emoji over stdin fails on size without corruption", as
   assert.equal(r.code, 2, "fails the body size limit");
   assert.match(r.stderr, /4000 characters/);
   assert.ok(!r.stderr.includes("�") && !r.stdout.includes("�"), "no replacement characters");
+});
+
+test("send treats an id-shaped file name as a file, never as an id", async (t) => {
+  const { home, server } = await fixture(t);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "grill-me-file-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  // 16 canonical base64url chars: isId("myquestionsfile1") is true, but send takes a file.
+  await fs.writeFile(path.join(dir, "myquestionsfile1"), DEMO_TEXT);
+  const r = await run(["send", "myquestionsfile1", "--qr", "off"], { home, server, cwd: dir });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^Grill Me: 4 questions/m);
 });
