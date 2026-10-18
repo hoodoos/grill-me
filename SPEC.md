@@ -122,7 +122,9 @@ is capped (systemd `MemoryMax=256M`, `CPUQuota=25%`, low CPU and IO priority).
 | `GET /healthz` | — | `200 {"ok":true}` · `503`, for an outside uptime monitor |
 | `POST /mcp` | — | the hosted MCP server (see [Hosted mode](#hosted-mode-grill-meaimcp)) |
 
-`expiresAt` is epoch milliseconds.
+`expiresAt` is epoch milliseconds. Every API route can also answer `400` for malformed input, `413` for a body
+over 32 KB and `429` when a limit is hit. Routes that need the write token answer `401` when it's missing or
+malformed and `403` when it's wrong.
 
 - **Retention.** A grill expires **1 hour after it's created**. When answers arrive, the deadline moves to
   **1 hour after the answers**, so an answer sent at minute 59 isn't lost. The agent's `DELETE` after it has
