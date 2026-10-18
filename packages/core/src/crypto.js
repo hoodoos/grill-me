@@ -40,7 +40,16 @@ export function b64urlDecode(str) {
 const random = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n));
 
 export const newSecret = () => b64urlEncode(random(16)); // 22 chars
-export const newId = () => b64urlEncode(random(12)); // 16 chars
+
+// 16 chars. Regenerate a leading "-": an id must never look like a command-line option.
+// (The server and isId still accept any valid id; only generation changes.)
+export function newId() {
+  let id;
+  do {
+    id = b64urlEncode(random(12));
+  } while (id.startsWith("-"));
+  return id;
+}
 
 const canonical = (s, bytes) => {
   try {
