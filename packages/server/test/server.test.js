@@ -99,6 +99,27 @@ test("a body over 32 KB → 413", async () => {
   await close();
 });
 
+test("a chunked body (no Content-Length) over 32 KB → a clean 413, not a reset", async () => {
+  const { base, close } = await start();
+  const stream = new ReadableStream({
+    start(c) {
+      for (let i = 0; i < 40; i++) c.enqueue(new TextEncoder().encode("x".repeat(1024)));
+      c.close();
+    },
+  });
+  const r = await fetch(`${base}/api/g`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: stream,
+    duplex: "half",
+  });
+  assert.equal(r.status, 413);
+  assert.deepEqual(await r.json(), { error: "body too large" });
+  // The connection still works after the drained body.
+  assert.equal((await fetch(`${base}/api/g/${newId()}`)).status, 404);
+  await close();
+});
+
 test("auth: missing or malformed → 401, wrong token → 403, right token → 204", async () => {
   const { base, close } = await start();
   const { id, secret, grill } = await createGrill(base);

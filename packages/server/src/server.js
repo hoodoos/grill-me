@@ -150,18 +150,20 @@ export function createServer(options = {}) {
 
   const readBody = (req) =>
     new Promise((resolve, reject) => {
-      const fail = (err) => { if (!req.destroyed) req.destroy(); reject(err); };
+      const tooBig = () => Object.assign(new Error("body too large"), { status: 413 });
       const len = Number(req.headers["content-length"] || 0);
-      if (len > BODY_CAP) { req.resume(); return reject(Object.assign(new Error("body too large"), { status: 413 })); }
+      if (len > BODY_CAP) { req.resume(); return reject(tooBig()); }
       const chunks = [];
-      let size = 0, settled = false;
+      let size = 0, over = false;
       req.on("data", (c) => {
         size += c.length;
-        if (size > BODY_CAP && !settled) { settled = true; fail(Object.assign(new Error("body too large"), { status: 413 })); }
-        else if (!settled) chunks.push(c);
+        // Over the cap mid-stream: stop buffering but keep draining, so the client gets a
+        // clean 413 instead of a socket reset.
+        if (size > BODY_CAP) { over = true; chunks.length = 0; }
+        else if (!over) chunks.push(c);
       });
-      req.on("end", () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks)); } });
-      req.on("error", (e) => { if (!settled) { settled = true; reject(e); } });
+      req.on("end", () => (over ? reject(tooBig()) : resolve(Buffer.concat(chunks))));
+      req.on("error", reject);
     });
 
   const readJson = async (req) => {
