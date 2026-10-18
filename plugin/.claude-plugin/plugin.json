@@ -1,0 +1,10 @@
+{
+  "name": "grill-me",
+  "description": "Ask the user questions as swipe cards on their phone, end-to-end encrypted. Answers land back in the session.",
+  "author": {
+    "name": "hoodoos"
+  },
+  "repository": "https://github.com/hoodoos/grill-me",
+  "homepage": "https://grill-me.ai",
+  "license": "MIT"
+}
