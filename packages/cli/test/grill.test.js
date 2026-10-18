@@ -254,25 +254,25 @@ test("metrics: user-agent header and question-count bucket on every request", as
     .filter((x) => !(x.method === "GET" && /^\/api\/g\/[^/]+$/.test(x.path)) && !(x.method === "POST" && x.path.endsWith("/answers")))
     .map((x) => x.userAgent);
   assert.ok(agents.length >= 3, "create, poll(s), delete");
-  assert.ok(agents.every((a) => a === "grill-me-ai/0.1.0 (test-agent)"), agents.join(", "));
+  assert.ok(agents.every((a) => a === "grill-me-ai/0.2.0 (test-agent)"), agents.join(", "));
   assert.equal(creates().at(-1).qb, "4-6", "DEMO_TEXT has 4 questions");
 
   // $GRILL_ME_AGENT is used when no option is passed
   process.env.GRILL_ME_AGENT = "ci-runner";
   await send(DEMO_TEXT, { server, home });
-  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0 (ci-runner)");
+  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.2.0 (ci-runner)");
 
   // an invalid $GRILL_ME_AGENT is dropped; CLAUDECODE=1 is the fallback
   process.env.GRILL_ME_AGENT = "INVALID AGENT!";
   process.env.CLAUDECODE = "1";
   await send(DEMO_TEXT, { server, home });
-  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0 (claude-code)");
+  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.2.0 (claude-code)");
 
   // nothing detected → no parenthesis
   delete process.env.GRILL_ME_AGENT;
   delete process.env.CLAUDECODE;
   await send({ questions: [{ title: "Only one" }] }, { server, home });
-  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0");
+  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.2.0");
   assert.equal(creates().at(-1).qb, "1");
 });
 
