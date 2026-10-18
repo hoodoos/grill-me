@@ -25,14 +25,20 @@ send reads stdin when no file is given and stdin isn't a terminal.`;
 class UsageError extends Error {}
 
 function parse(argv, options, { min = 0, max = 1 } = {}) {
-  let args;
+  // Grill ids can start with '-'; no command has short options, so a single-dash
+  // token is always an id — pull it out before parseArgs rejects it as an option.
+  const args = [...argv];
+  const dash = args.findIndex((a) => /^-[^-]/.test(a));
+  const id = dash === -1 ? undefined : args.splice(dash, 1)[0];
+  let parsed;
   try {
-    args = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
+    parsed = parseArgs({ args, options, allowPositionals: true, strict: true });
   } catch (err) {
     throw new UsageError(err.message);
   }
-  if (args.positionals.length < min || args.positionals.length > max) throw new UsageError("wrong number of arguments");
-  return args;
+  const positionals = id === undefined ? parsed.positionals : [id, ...parsed.positionals];
+  if (positionals.length < min || positionals.length > max) throw new UsageError("wrong number of arguments");
+  return { ...parsed, positionals };
 }
 
 async function readStdin(stdin) {

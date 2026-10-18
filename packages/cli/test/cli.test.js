@@ -167,6 +167,13 @@ test("an unknown id exits 2 with a clear message", async (t) => {
   assert.match(r.stderr, /another machine|already fetched/);
 });
 
+test("an id that starts with a dash is parsed as the id, not an option", async (t) => {
+  const { home, server } = await fixture(t);
+  const r = await run(["wait", "-bcd1234_efgh-ij"], { home, server });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /another machine|already fetched/);
+});
+
 test("mcp is a placeholder that exits 1", async (t) => {
   const { home } = await fixture(t);
   const r = await run(["mcp"], { home });
