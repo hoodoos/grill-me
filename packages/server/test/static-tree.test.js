@@ -50,14 +50,17 @@ test("the static tree nginx serves matches what the Node static routes serve", a
 test("the nginx snippet's locations match the Node server's routes", async () => {
   const text = async (p) => (await readFile(p, "utf8")).replace(/\r\n/g, "\n"); // tolerate a CRLF checkout
   const snippet = await text(path.join(ROOT, "deploy/nginx/grill-me.ai-locations.conf"));
-  const proxyLocations = [...snippet.matchAll(/^location (\S+) \{$/gm)].map((m) => m[1]);
-  const proxied = [...snippet.matchAll(/location (\S+) \{\n    proxy_pass http:\/\/127\.0\.0\.1:8787;/g)].map((m) => m[1]);
+  const locationBlocks = [...snippet.matchAll(/^location (\S+) \{\n([\s\S]*?)^\}/gm)];
+  const proxied = locationBlocks.filter((m) => m[2].includes("proxy_pass http://127.0.0.1:8787;")).map((m) => m[1]);
   assert.deepEqual(proxied.sort(), ["/api/", "/g/"]);
   // No other location proxies.
   assert.equal((snippet.match(/proxy_pass/g) || []).length, 2);
-  // The static locations serve from files.
-  assert.match(snippet, /location = \/demo \{\n    try_files \/grill\.html =404;/);
-  assert.match(snippet, /location \/ \{\n    try_files \$uri \$uri\.html \$uri\/ =404;/);
+  // The static locations serve from files (HSTS is the only header before try_files).
+  assert.match(snippet, /location = \/demo \{[\s\S]*?try_files \/grill\.html =404;/);
+  assert.match(snippet, /location \/ \{[\s\S]*?try_files \$uri \$uri\.html \$uri\/ =404;/);
+  // Every location carries HSTS.
+  for (const m of locationBlocks)
+    assert.ok(m[2].includes('add_header Strict-Transport-Security "max-age=31536000" always;'), m[1]);
   // Node's dynamic routes are exactly /api/* and /g/:id.
   const serverSrc = await text(path.join(ROOT, "packages/server/src/server.js"));
   assert.match(serverSrc, /p === "\/api\/g"/);
