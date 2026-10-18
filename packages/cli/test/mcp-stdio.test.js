@@ -54,11 +54,11 @@ class McpClient {
   }
 }
 
-async function fixture(t, { clientName = "Claude Code" } = {}) {
+async function fixture(t, { clientName = "Claude Code", env = {} } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "grill-me-mcp-"));
   const fake = await startFakeServer();
   const child = spawn(process.execPath, [BIN, "mcp"], {
-    env: { ...process.env, GRILL_ME_HOME: home, GRILL_ME_SERVER: fake.url },
+    env: { ...process.env, GRILL_ME_HOME: home, GRILL_ME_SERVER: fake.url, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const mcp = new McpClient(child);
@@ -176,4 +176,40 @@ test("the UA falls back through the allowlist for unknown clients", async (t) =>
   await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
   const creates = fake.requests().filter((x) => x.method === "POST" && x.path === "/api/g");
   assert.equal(creates.at(-1).userAgent, "grill-me-ai/0.1.0 (other)");
+});
+
+test("GRILL_ME_WAIT_SECONDS caps the seconds argument", async (t) => {
+  const { fake, mcp } = await fixture(t, { env: { GRILL_ME_WAIT_SECONDS: "2" } });
+  const sent = await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
+  const { id } = sent.result.structuredContent;
+  const waited = await mcp.request("tools/call", { name: "grill_wait", arguments: { id, seconds: 50 } });
+  assert.equal(waited.result.structuredContent.status, "WAITING");
+  const params = fake.waitParams(id);
+  assert.ok(params.length > 0);
+  assert.ok(Math.max(...params) <= 2, `every poll capped at the env value: ${params}`);
+});
+
+test("a non-numeric seconds falls back to the default instead of NaN", async (t) => {
+  const { fake, mcp } = await fixture(t, { env: { GRILL_ME_WAIT_SECONDS: "2" } });
+  const sent = await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
+  const { id } = sent.result.structuredContent;
+  const waited = await mcp.request("tools/call", { name: "grill_wait", arguments: { id, seconds: "abc" } });
+  assert.equal(waited.result.structuredContent.status, "WAITING");
+  const params = fake.waitParams(id);
+  assert.ok(params.length > 0);
+  assert.ok(params.every((p) => Number.isFinite(p) && p <= 2), `'abc' became the default, not NaN: ${params}`);
+});
+
+test("the grill_wait description carries the real default and max", async (t) => {
+  const { mcp } = await fixture(t, { env: { GRILL_ME_WAIT_SECONDS: "840" } });
+  const list = await mcp.request("tools/list");
+  const wait = list.result.tools.find((x) => x.name === "grill_wait");
+  assert.match(wait.inputSchema.properties.seconds.description, /\(default 840, max 840\)/);
+});
+
+test("without GRILL_ME_WAIT_SECONDS the description keeps the built-in numbers", async (t) => {
+  const { mcp } = await fixture(t);
+  const list = await mcp.request("tools/list");
+  const wait = list.result.tools.find((x) => x.name === "grill_wait");
+  assert.match(wait.inputSchema.properties.seconds.description, /\(default 45, max 900\)/);
 });

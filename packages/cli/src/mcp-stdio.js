@@ -12,10 +12,20 @@ const INSTRUCTIONS =
   "2 or more questions (one question: just ask in chat). Show the link as plain text and the QR in a code " +
   "block, then call grill_wait with the id. If the user answers in chat instead, call grill_cancel.";
 
-const waitSeconds = (arg, env) => {
+// GRILL_ME_WAIT_SECONDS is both the default and, when set, the cap: each client sets it to fit
+// its tool time limit (Desktop 180 < 240 s, Codex 840 < 900), so a larger `seconds` must not
+// exceed it. Without the env the cap is 900. A non-numeric `seconds` falls back to the default.
+const waitConfig = (env) => {
   const fromEnv = Number(env.GRILL_ME_WAIT_SECONDS);
-  const chosen = arg ?? (Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 45);
-  return Math.min(900, Math.max(1, Math.floor(chosen)));
+  const envValid = Number.isFinite(fromEnv) && fromEnv > 0;
+  const def = envValid ? Math.floor(fromEnv) : 45;
+  return { default: def, max: envValid ? def : 900 };
+};
+
+const waitSeconds = (arg, { default: def, max }) => {
+  const n = arg === undefined || arg === null ? NaN : Number(arg);
+  const chosen = Number.isFinite(n) ? n : def;
+  return Math.min(max, Math.max(1, Math.floor(chosen)));
 };
 
 const STATUS_TEXT = {
@@ -25,6 +35,7 @@ const STATUS_TEXT = {
 };
 
 function localTools(env) {
+  const waitCfg = waitConfig(env);
   const runs = {
     grill_send: async (args, ctx) => {
       const hasGrill = args.grill !== undefined;
@@ -51,7 +62,7 @@ function localTools(env) {
     },
 
     grill_wait: async (args, ctx) => {
-      const seconds = waitSeconds(args.seconds, env);
+      const seconds = waitSeconds(args.seconds, waitCfg);
       const result = await wait(String(args.id ?? ""), {
         seconds,
         agent: clientAgent(ctx.clientInfo),
@@ -70,7 +81,7 @@ function localTools(env) {
       return { text: `Cancelled ${id}.`, structured: { status: "CANCELLED" } };
     },
   };
-  return grillToolDefs({ mode: "local" }).map((def) => ({ ...def, run: runs[def.name] }));
+  return grillToolDefs({ mode: "local", waitSeconds: waitCfg }).map((def) => ({ ...def, run: runs[def.name] }));
 }
 
 // Starts the server; resolves when stdin closes. Diagnostics (never arguments or results) to stderr.
