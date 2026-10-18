@@ -49,6 +49,13 @@ the shipped hardening, checks nginx-user reads and data/env privacy, then remove
 and fixtures. This opt-in test is skipped in ordinary suites; Linux mode/diagnostic tests run
 without it. Windows skips those POSIX tests.
 
+For the complete local nginx/MIME regression, install nginx with `/etc/nginx/mime.types`
+and run `GRILL_ME_NGINX_TEST=1 node --test packages/server/test/nginx.test.js` on Linux.
+It uses an isolated prefix/high ports, real Node and the full `check.sh`/50-second long-poll
+probe. It accepts exact `text/javascript` and `application/javascript` MIME essences and
+rejects invalid/ambiguous types or missing security headers. Ordinary suites skip this
+opt-in integration; no installed nginx configuration is changed.
+
 The site file is `/etc/nginx/sites-available/grill-me.ai`, enabled as
 `/etc/nginx/sites-enabled/zz-grill-me.ai`. Keep the `zz-` link name: it keeps the other sites as
 the per-port defaults. Never add `default_server`.

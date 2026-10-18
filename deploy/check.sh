@@ -28,14 +28,41 @@ RID=$("$NODE" -e 'console.log(require("crypto").randomBytes(12).toString("base64
 CHROME_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 CHROME_ACCEPT='text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
 url_check() { # path expected-status expected-content-type-prefix [extra curl args...]
+  # JavaScript is special: accept only the two exact MIME essences, ignoring case/parameters.
   local path="$1" want="$2" ctype="$3"; shift 3
-  local hdrs code
-  hdrs=$(curl -sS -m 15 -D - -o /dev/null "$@" "$BASE$path") || { fail "GET $path (request failed)"; return; }
-  code=$(head -1 <<<"$hdrs" | awk '{print $2}')
-  [ "$code" = "$want" ] || { fail "GET $path → $code, want $want"; return; }
-  if [ -n "$ctype" ] && ! grep -qi "^content-type: $ctype" <<<"$hdrs"; then fail "GET $path content-type"; return; fi
+  local hdrs code actual_type essence observed safe_type request_ok=1
+  hdrs=$(curl -sS -m 15 -D - -o /dev/null "$@" "$BASE$path") || request_ok=0
+  # curl may print interim/proxy response blocks too. Security headers must belong to the
+  # same final response as the status and MIME type being checked.
+  hdrs=$(awk '/^HTTP\// { block="" } { block=block $0 "\n" } END { printf "%s", block }' <<<"$hdrs")
+  code=$(awk '/^HTTP\// { code=$2 } END { print code }' <<<"$hdrs")
+  [[ "$code" =~ ^[0-9]{3}$ ]] || code=000
+  actual_type=$(awk '
+    /^HTTP\// { value="" }
+    tolower($0) ~ /^content-type:/ {
+      sub(/^[^:]*:[ \t]*/, ""); sub(/\r$/, "")
+      value = length(value) ? value ", " $0 : $0
+    }
+    END { print value }' <<<"$hdrs")
+  safe_type=$(printf '%s' "${actual_type:-<missing>}" | LC_ALL=C tr -cd '[:print:]' | head -c 160)
+  observed="HTTP $code; Content-Type: $safe_type"
+  [ "$request_ok" = 1 ] || { fail "GET $path request failed ($observed)"; return; }
+  [ "$code" = "$want" ] || { fail "GET $path → $code, want $want ($observed)"; return; }
+  if [ "$ctype" = text/javascript ]; then
+    case "$actual_type" in
+      *,*) fail "GET $path content-type ($observed)"; return ;; # ambiguous combined/duplicate fields
+    esac
+    essence=${actual_type%%;*}
+    essence=$(printf '%s' "$essence" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    case "$essence" in
+      text/javascript|application/javascript) ;;
+      *) fail "GET $path content-type ($observed)"; return ;;
+    esac
+  elif [ -n "$ctype" ] && ! grep -qi "^content-type: $ctype" <<<"$hdrs"; then
+    fail "GET $path content-type ($observed)"; return
+  fi
   for h in content-security-policy referrer-policy x-content-type-options cross-origin-opener-policy permissions-policy; do
-    grep -qi "^$h:" <<<"$hdrs" || { fail "GET $path missing $h"; return; }
+    grep -qi "^$h:" <<<"$hdrs" || { fail "GET $path missing $h ($observed)"; return; }
   done
   pass "GET $path → $code"
 }
