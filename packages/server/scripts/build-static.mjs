@@ -1,9 +1,12 @@
 // Writes the exact static tree nginx serves: packages/server/public/* at the root,
-// packages/ui/src → ui/, packages/core/src → core/ (no tests, no READMEs).
+// packages/ui/src → ui/, packages/core/src → core/ (no tests, no READMEs). Plus the install
+// guide: site/install.md → install.md, site/llms.txt → llms.txt, and index.html with the guide
+// rendered in (the same render the Node server does at startup).
 // Usage: node packages/server/scripts/build-static.mjs <outdir>
 import path from "node:path";
-import { mkdir, readdir, copyFile, rm } from "node:fs/promises";
+import { mkdir, readdir, copyFile, rm, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { renderHomepage, INSTALL_MD, LLMS_TXT } from "../src/install.js";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(SRC, "..", "..", "..");
@@ -30,4 +33,10 @@ await rm(out, { recursive: true, force: true });
 await copyTree(path.join(ROOT, "packages", "server", "public"), out);
 await copyTree(path.join(ROOT, "packages", "ui", "src"), path.join(out, "ui"));
 await copyTree(path.join(ROOT, "packages", "core", "src"), path.join(out, "core"));
+await copyFile(INSTALL_MD, path.join(out, "install.md"));
+await copyFile(LLMS_TXT, path.join(out, "llms.txt"));
+await writeFile(
+  path.join(out, "index.html"),
+  renderHomepage(await readFile(path.join(out, "index.html"), "utf8"), await readFile(INSTALL_MD, "utf8")),
+);
 console.log(`static tree written to ${out}`);
