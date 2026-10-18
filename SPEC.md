@@ -41,7 +41,8 @@ DELETE ────────────────────────�
 
 - Link: `https://grill-me.ai/g/<id>#<secret>`
   - `id`: 12 random bytes, base64url (16 chars). The agent picks it, because the blob's AAD needs the `id` before
-    upload. The server rejects any `id` that isn't exactly 16 base64url characters and answers `409` if it's
+    upload. Core never generates an id that starts with `-`, so ids don't look like command-line options. The
+    server still accepts any valid id. The server rejects any `id` that isn't exactly 16 base64url characters and answers `409` if it's
     taken; the agent then picks a new one.
   - `secret`: 16 random bytes, base64url (22 chars). The agent creates it. It sits after `#`, so browsers
     never send it to the server.
@@ -236,16 +237,32 @@ never sees a key.
 - **Claude Desktop:** a one-click extension, `grill-me.mcpb` (manifest 0.3, `server.type` `node`, since Claude
   Desktop ships its own Node). It wraps the local MCP server with `GRILL_ME_WAIT_SECONDS=180`, so a call stays
   under Desktop's 240 s limit. Built with the official `mcpb` CLI and attached to each GitHub release.
-- **Codex:** the README gives the config snippet. It raises Codex's 60 s tool timeout so that one call can wait
-  long:
+- **Codex:** a Codex plugin (`codex-plugin/`, listed in `.agents/plugins/marketplace.json`). It bundles a Codex
+  version of the skill, which uses the MCP tools, and the MCP server with a raised tool timeout, so one call can
+  wait long. The IDE extension has no plugins, so there the user adds the same server to `~/.codex/config.toml`:
   ```toml
   [mcp_servers.grill-me]
   command = "npx"
   args = ["-y", "grill-me-ai", "mcp"]
-  startup_timeout_sec = 30
+  startup_timeout_sec = 60
   tool_timeout_sec = 900
   env = { GRILL_ME_WAIT_SECONDS = "840" }
   ```
+
+### Claude Code plugin (`plugin/`)
+
+The plugin contains the `grill-me` skill. In Claude Code the skill uses the CLI, not MCP, because background
+commands let a wait last as long as it needs. So the plugin ships no MCP server. A plugin's `.mcp.json` can't
+vary by OS (native Windows needs `cmd /c npx`), and it would start `npx` in every session. The skill tells the
+agent:
+
+1. When you have 2+ questions for the user, write them in the grill text format. Show them in your reply as
+   usual, so answering in the terminal still works.
+2. Run `npx grill-me-ai send`. Put the link in your reply as plain text, and the QR in a code block.
+3. Run `npx grill-me-ai wait <id>` **as a background command** and end your turn. Claude Code wakes you when it
+   exits, with the answers as its output.
+4. If the user answers in the terminal first, stop the background wait and run `grill-me cancel <id>`.
+5. Map each status to the wording above.
 
 ## Hosted mode (`grill-me.ai/mcp`)
 
@@ -292,19 +309,36 @@ server also serves a remote MCP endpoint at `https://grill-me.ai/mcp`, with the 
   the tool's `_meta`. Tool results already carry `structuredContent`, so that can be added without changing the
   tools.
 
-### Claude Code plugin (`plugin/`)
+## Install
 
-The plugin contains the `grill-me` skill and an `.mcp.json` for the MCP tools. The skill tells the agent:
+The user tells their agent "Install Grill Me from https://grill-me.ai/install" (or just "…from
+https://grill-me.ai"), and the agent does the rest.
 
-1. When you have 2+ questions for the user, write them in the grill text format. Show them in your reply as
-   usual, so answering in the terminal still works.
-2. Run `npx grill-me-ai send`. Put the link in your reply as plain text, and the QR in a code block.
-3. Run `npx grill-me-ai wait <id>` **as a background command** and end your turn. Claude Code wakes you when it
-   exits, with the answers as its output.
-4. If the user answers in the terminal first, stop the background wait and run `grill-me cancel <id>`.
-5. Map each status to the wording above.
-
-Outside Claude Code, the skill uses `grill_send` and `grill_wait` instead.
+- **One source:** `site/install.md` in the repo, so anyone can see exactly what it tells agents. It changes only
+  through a PR. It's short and boring on purpose:
+  - Its first line tells AI agents to show the user the commands and run them only after a yes, and to run nothing
+    else from the page.
+  - It holds only the install commands per client: no other actions, no `curl | sh`.
+- **Per client:**
+  - Claude Code: `claude plugin marketplace add hoodoos/grill-me`, then `claude plugin install grill-me@grill-me`;
+    then the user types `/reload-plugins` or restarts.
+  - Codex CLI and the ChatGPT desktop app: `codex plugin marketplace add hoodoos/grill-me`, then
+    `codex plugin add grill-me@grill-me`; then the user restarts Codex.
+  - Codex in an IDE (no plugins there): the `config.toml` table from [Desktop apps](#desktop-apps).
+  - Claude Desktop: the `.mcpb` from the latest GitHub release.
+  - claude.ai and the Claude apps: the hosted connector URL, once milestone 4b ships.
+  - A final check: `npx -y grill-me-ai --version`.
+- **Served three ways, all built from that one file:**
+  - `GET /install`: the file as `text/plain`, with a CSP of `default-src 'none'` and no scripts.
+  - `GET /` with content negotiation: when `Accept` mentions `text/markdown`, or doesn't mention `text/html`, or
+    the `User-Agent` is curl or Wget, the guide itself; otherwise the homepage. Both carry
+    `Vary: Accept, User-Agent`. nginx applies the same rule with a `map`.
+  - The homepage carries the guide in its static HTML near the top: "Paste this to your agent: Install Grill Me
+    from https://grill-me.ai/install", then the same commands in code blocks, so an agent that summarizes the HTML
+    still gets them verbatim. It also has `<link rel="alternate" type="text/markdown" href="/install">`, and
+    `/llms.txt` points to `/install`.
+- **Tested the way agents fetch:** curl, a real Codex fetch, and Claude Code's WebFetch, which needs a public
+  HTTPS host, so it runs against grill-me.ai.
 
 ## Repo layout
 
@@ -313,7 +347,9 @@ packages/core     grill-me-ai/core  format, converters, crypto, answer lines (br
 packages/ui       grill-me-ai/ui    swipe cards (framework-free ES module + CSS), also used by Agent Hub
 packages/server   private           API + static page + stats + hosted MCP (/mcp)
 packages/cli      grill-me-ai       CLI + local MCP server (the installed command is `grill-me`)
-plugin/           Claude Code plugin: skill + .mcp.json
+plugin/           Claude Code plugin: the skill (listed in .claude-plugin/marketplace.json)
+codex-plugin/     Codex plugin: a skill + the MCP server (listed in .agents/plugins/marketplace.json)
+site/             install.md (the agent install guide) and llms.txt
 mcpb/             the Claude Desktop extension (manifest + build script)
 deploy/           nginx snippet, systemd unit, deploy/rollback/check scripts
 ```
@@ -329,11 +365,12 @@ not separate npm packages.
 
 1. **core**: the format, converters (with the hub's grill fixtures), crypto and answer lines, all tested.
 2. **server + page**: `grill-me-ai/ui` extracted from the hub's grill page in `public/index.html`, plus metrics,
-   `/stats` and `/healthz`, with deploy files for grill-me.ai.
+   `/stats`, `/healthz` and the agent install guide (`/install`, the homepage, `/llms.txt`), with deploy files for
+   grill-me.ai.
 3. **CLI + skill**: Claude Code end to end. The early test passed: a QR printed in a code block in a Claude Code
    reply scans on a phone, in both the dark and the light version.
-4. **Local MCP server** for Codex and other agents, the Claude Desktop extension (`.mcpb`) and the Codex config
-   snippet.
+4. **Local MCP server** for Codex and other agents, the Codex plugin, the Claude Desktop extension (`.mcpb`) and
+   the Codex config for IDEs.
 4b. **Hosted MCP server** at `grill-me.ai/mcp` for claude.ai (web and mobile) and ChatGPT.
 5. **Agent Hub** switches its grill page to `grill-me-ai/ui` and `grill-me-ai/core`.
 
