@@ -9,8 +9,11 @@ It's a free, open-source taster for Agent Hub: the same grill UI, without accoun
 
 ## Install
 
-**0.1.0 is not released; installation commands below require the public release.** See the
-repository [acceptance checklist and release hold](https://github.com/hoodoos/grill-me/blob/main/docs/ACCEPTANCE.md)
+Public installation requires `grill-me-ai@0.1.0` published to npm and the M4 plugin
+marketplaces available on main. The Claude Desktop download also requires the GitHub
+`v0.1.0` release asset. For the dated release status, pending gates and separate private
+artifact steps, see the repository
+[acceptance checklist](https://github.com/hoodoos/grill-me/blob/main/docs/ACCEPTANCE.md)
 (available on main after the reviewed documentation merge).
 
 Paste this to your agent: **Install Grill Me from https://grill-me.ai/install**

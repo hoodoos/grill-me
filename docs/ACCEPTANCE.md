@@ -1,8 +1,10 @@
 # Grill Me acceptance checklist
 
 **2026-10-18: 0.1.0 is NOT released. Release, merges and publishing remain on HOLD
-for direct Agent Hub UI and interaction parity review and fixes.** This is a checklist
-with pending gates, not a statement that the product is ready or acceptance is complete.
+for corrected production/device acceptance.** Local UI source and final CSS review are
+accepted; measured Hub comparisons are present locally, and the production/device
+gates remain pending. This checklist does not establish release readiness or complete
+acceptance.
 
 ## What to test now
 
@@ -29,10 +31,21 @@ agreement to a prompt is not returned tool output. Record each actual result sep
 
 ## Current evidence and client matrix
 
-Recorded technical evidence belongs to candidate
+Historical production and technical evidence belongs to candidate
 `624c2b8127ae15861c6d58608c3a50f0385780e8` (2026-10-18), not to later UI changes.
 API/CLI/MCP and real mobile-browser checks passed, but these do not prove installation in
-each actual client or Hub parity. Changed UI requires fresh browser and parity checks.
+each actual client or Hub parity. Production still runs that old candidate, without the
+corrected UI. Its artifacts, hashes and acceptance do not transfer to corrected source.
+
+The local UI correction is implemented in
+`5bf570b80ab3ea87cbfb4b4e2165fc81c5e18650`. Direct actual-Chrome Hub/app comparisons and
+independent lead validation passed within the measured scope: 390 × 844, 390 × 600 and
+1280 × 800, plus simulated 350/400 px viewport resizing. Actual CDP touch over a choice
+description advanced the card with the AGREE stamp like Hub; expanded comparisons
+covered 36 geometry cases and 20 gestures with zero page errors. This is **local source
+proof only**, not corrected production or real-device acceptance. Local UI source and
+final CSS review are accepted; corrected production deployment, owner right/left phone swipes, actual software
+keyboard behavior and Claude Code WebFetch remain **PENDING**.
 
 **TESTED** means only the named evidence passed. **PENDING** needs the actual client or
 reviewer check. **NOT AVAILABLE IN 0.1.0** means the hosted integration is not implemented
@@ -49,8 +62,8 @@ in milestones 1–4 (M4b is separate).
 | claude.ai / Claude mobile hosted connector | **NOT AVAILABLE IN 0.1.0**: M4b hosted connector is not implemented. |
 | ChatGPT web/mobile hosted MCP | **NOT AVAILABLE IN 0.1.0**: M4b is not implemented. This checklist makes no promise of ChatGPT mobile support. |
 
-Other recorded evidence: real Chrome 155, 390 × 844 touch viewport, passed transport,
-resume and browser error scenarios with zero page errors; actual Codex guide reading
+Other historical candidate 624 evidence: real Chrome 155, 390 × 844 touch viewport,
+passed transport, resume and browser error scenarios with zero page errors; actual Codex guide reading
 passed **without installation**. These runs did not establish direct Hub UI parity.
 Claude Desktop GUI and owner phone acceptance remain pending. The earlier owner fixture
 without recommendations was cancelled; absence of a recommendation can legitimately open
@@ -67,19 +80,25 @@ After publication, a version-pinned public CLI invocation uses `npx -y grill-me-
 Show installation commands and obtain the user's explicit yes before installing.
 
 Before publication, the release reviewer privately supplies the **exact reviewed** `.tgz`
-and `.mcpb`; do not rebuild or substitute another file with the same version number.
-The hashes below identify the **HELD 624 candidate**, not corrected release artifacts.
-After UI correction, the reviewer must review the new artifacts and replace these hashes
-before accepting the corrected candidate; the old hashes do not transfer to a new build.
+and `.mcpb`, together with the approved `SHA256SUMS` and `provenance.json`. The provenance
+must bind the full source commit SHA used for the build to the artifact filenames,
+versions and SHA-256 hashes. Check that this is the reviewer's approved corrected source,
+not stale candidate 624, and that both artifact files belong to that same approved manifest.
+Reject a filename/version/hash mismatch or another file with the same version number.
 
-| HELD 624 candidate artifact | Reviewed SHA-256 |
-| --- | --- |
-| `grill-me-ai` 0.1.0 `.tgz` | `ba0ee43a75a3fd7b158946b1257f5a49430ea6af594aa314496f2009f8730389` |
-| `grill-me.mcpb` 0.1.0 | `d6d4163e1dc2383c5dd9dc50be8aa4f2d165c1f00b62b321aa925377b5491a6e` |
+After an approved public release, use its checksum/provenance assets attached to the
+[GitHub v0.1.0 release](https://github.com/hoodoos/grill-me/releases/tag/v0.1.0) **if present**;
+otherwise obtain the reviewer-supplied verified manifest and provenance. This is a future,
+release-gated location, not a claim that the release or those assets already exist.
+Exact hashes belong to the approved release provenance, rather than this reusable
+checklist. Bind the final source commit after documentation review; do not edit that
+commit to insert its own artifact hashes. Verify the exact supplied bytes: a rebuilt
+MCPB can differ because of ZIP timestamps and needs its own review and provenance.
 
 Use Node 22+ for the local CLI/MCP setup. Replace the quoted artifact paths below with
 the reviewer's actual absolute paths (forward slashes also work with Node on Windows).
-This read-only command prints the hashes; compare both with the table before installation:
+This read-only command prints the hashes; compare both filenames and hashes with the
+same reviewer-approved `SHA256SUMS` and `provenance.json` before installation:
 
 ```sh
 node -e "const fs=require('node:fs'),c=require('node:crypto'); for(const p of process.argv.slice(1)) console.log(c.createHash('sha256').update(fs.readFileSync(p)).digest('hex'),p)" "/absolute/path/grill-me-ai-0.1.0.tgz" "/absolute/path/grill-me.mcpb"
@@ -197,19 +216,23 @@ not prove agent collection: verify the actual agent result and subsequent pickup
 
 ## Direct browser and Hub parity gate
 
-**Fix and direct review PENDING; this blocks release readiness.** The observed long-body
-fixture made standalone content 2433 px tall in an 844 px viewport, with bottom controls
+**Local UI source/final CSS review accepted and measured comparisons passed; corrected
+production/device gates remain PENDING and block release readiness.** In old candidate
+624, the observed long-body fixture made standalone content 2433 px tall in an 844 px
+viewport, with bottom controls
 offscreen; Hub kept the viewport contract with internal scrolling. A touch gesture over
 a standalone full choice-detail button was excluded from swipe handling, while the same
-body gesture advanced the Hub card. Recheck these after the viewport and compact
-single-choice-chip fix; preserve safe text rendering and multi-choice behavior.
+body gesture advanced the Hub card. Local source `5bf570b80ab3ea87cbfb4b4e2165fc81c5e18650`
+implements the bounded viewport and compact single-choice chips, with swipeable
+descriptions. The local comparisons summarized above cover these corrections; preserve
+safe text rendering and multi-choice behavior and rerun on the corrected deployment.
 
 Compare the **same recommendation-bearing fixture** directly in Hub and standalone,
 at **390 × 844**, short **390 × 600**, and desktop **1280 × 800** viewports. Include
 viewport and keyboard resizing. Distinguish evidence with an actual software keyboard
 from simulated viewport resizing; a simulated resize does not prove keyboard behavior.
-Do not claim they are identical until the
-baseline comparison is measured. Record the candidate, viewport, gesture coordinates and
+Measured local comparisons support only their recorded scope; do not claim the whole
+UI is identical. Record the candidate, viewport, gesture coordinates and
 timing, expected/actual results and redacted screenshots where useful.
 
 - [ ] Body, recommendation and choices: same content and safe bold/code rendering;
@@ -251,7 +274,8 @@ baseline without copying it into the repository.
 
 ## Evidence to return to the release reviewer
 
-- Client name/version, candidate commit, artifact version and SHA-256.
+- Client name/version, full build source commit, artifact filenames/versions/SHA-256,
+  and the same reviewer-approved `SHA256SUMS` and `provenance.json` binding them.
 - Actual tool/CLI result (including status), exact expected versus returned answer lines,
   and separate WebFetch results for both URLs when that client provides WebFetch.
 - Browser/device/version, viewport, real finger or CDP touch method, gesture results,
