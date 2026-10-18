@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const LIB = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "deploy", "lib");
+const DEPLOY = path.join(LIB, "..");
 // bash (Git Bash) needs POSIX paths for globs; Windows temp paths like C:\… don't expand.
 const toBash = (p) => p.replace(/^([A-Za-z]):[\\/]/, (_, d) => `/${d.toLowerCase()}/`).replace(/\\/g, "/");
 const run = (script, ...args) => promisify(execFile)("bash", [toBash(path.join(LIB, script)), ...args.map(toBash)]);
@@ -131,4 +132,14 @@ test("restore-site: without a clean backup, strips the include and puts location
   assert.ok(!text.includes("grill-me.ai-locations.conf"));
   const b443 = blocks(text).find(is443);
   assert.ok(/location[ \t]+\/[ \t]*\{[^}]*try_files \$uri \$uri\/ =404;[^}]*\}/.test(b443), "location / restored");
+});
+
+test("deploy.sh accepts a full 40-hex sha as the ref", async () => {
+  const src = (await readFile(path.join(DEPLOY, "deploy.sh"), "utf8")).replace(/\r\n/g, "\n");
+  assert.match(src, /\[\[ "\$REF" =~ \^\[0-9a-f\]\{40\}\$ \]\]/, "sha-shaped ref check");
+  // A sha deploy fetches the exact commit instead of resolving a name with ls-remote.
+  assert.match(src, /SHA=\$REF/);
+  assert.match(src, /git -C "\$REL" fetch --quiet --depth 1 origin "\$SHA"/);
+  // The final checks come from the release, not the operator's clone.
+  assert.match(src, /bash "\$REL\/deploy\/check\.sh"/);
 });
