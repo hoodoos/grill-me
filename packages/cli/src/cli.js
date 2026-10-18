@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { send, wait, check, resend, cancel } from "./index.js";
+import { isId } from "../../core/src/index.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -25,14 +26,21 @@ send reads stdin when no file is given and stdin isn't a terminal.`;
 class UsageError extends Error {}
 
 function parse(argv, options, { min = 0, max = 1 } = {}) {
-  let args;
+  // Grill ids can start with '-' or '--', which parseArgs would reject as unknown
+  // options. The id shape (16 canonical base64url chars) matches no option name
+  // or value, so pull the id out before parseArgs runs.
+  const args = [...argv];
+  const at = args.findIndex(isId);
+  const id = at === -1 ? undefined : args.splice(at, 1)[0];
+  let parsed;
   try {
-    args = parseArgs({ args: argv, options, allowPositionals: true, strict: true });
+    parsed = parseArgs({ args, options, allowPositionals: true, strict: true });
   } catch (err) {
     throw new UsageError(err.message);
   }
-  if (args.positionals.length < min || args.positionals.length > max) throw new UsageError("wrong number of arguments");
-  return args;
+  const positionals = id === undefined ? parsed.positionals : [id, ...parsed.positionals];
+  if (positionals.length < min || positionals.length > max) throw new UsageError("wrong number of arguments");
+  return { ...parsed, positionals };
 }
 
 async function readStdin(stdin) {

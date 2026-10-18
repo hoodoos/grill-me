@@ -23,7 +23,10 @@ test("the packed tarball installs and works", { skip: !!process.env.GRILL_ME_SKI
   const tarball = sh(process.execPath, [PACK]);
   t.after(() => fs.rmSync(path.join(cliDir, "dist"), { recursive: true, force: true }));
 
-  const listing = sh("tar", ["--force-local", "-tzf", tarball]);
+  // --force-local exists only in GNU tar, which treats C:\... as a remote file;
+  // bsdtar (macOS, Windows System32) rejects the flag and handles drive letters itself
+  const gnuTar = spawnSync("tar", ["--version"], { encoding: "utf8" }).stdout?.includes("GNU");
+  const listing = sh("tar", [...(gnuTar ? ["--force-local"] : []), "-tzf", tarball]);
   assert.ok(listing.includes("package/packages/cli/bin/grill-me.js"), "bin ships");
   assert.ok(listing.includes("package/packages/core/src/index.js"), "core ships");
   assert.ok(!/(^|\n)package\/.*(test|scripts)\//.test(listing), "no test or script files ship");
