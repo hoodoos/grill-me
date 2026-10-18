@@ -1,7 +1,7 @@
 // The grill-me command. The library (src/index.js) does the work; this file only parses and prints.
 import fs from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { send, wait, fetch as fetchAnswers, resend, cancel } from "./index.js";
+import { send, wait, check, resend, cancel } from "./index.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -36,13 +36,16 @@ function parse(argv, options, { min = 0, max = 1 } = {}) {
 }
 
 async function readStdin(stdin) {
-  let data = "";
-  for await (const chunk of stdin) data += chunk;
-  return data;
+  // Buffer.concat, not string +=: a multi-byte character split across chunks must not corrupt.
+  const chunks = [];
+  for await (const chunk of stdin) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function withinPhrase(expiresAt) {
-  const ms = (expiresAt ? Date.parse(expiresAt) : NaN) - Date.now();
+  // the real server sends epoch milliseconds; an ISO string is accepted defensively
+  const at = typeof expiresAt === "number" ? expiresAt : Date.parse(expiresAt);
+  const ms = at - Date.now();
   const minutes = Number.isNaN(ms) ? 60 : Math.max(1, Math.round(ms / 60000));
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
@@ -106,7 +109,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
       case "fetch": {
         const { values, positionals } = parse(rest, { ...serverOpt });
         const [id] = positionals;
-        const result = await (cmd === "wait" ? wait(id, { server: values.server }) : fetchAnswers(id, { server: values.server }));
+        const result = await (cmd === "wait" ? wait(id, { server: values.server }) : check(id, { server: values.server }));
         switch (result.status) {
           case "ANSWERS":
             if (result.deleteError) err(`grill-me: answers received, but deleting the grill failed: ${result.deleteError}`);

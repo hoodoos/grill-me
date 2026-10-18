@@ -11,7 +11,7 @@ import { phoneAnswer } from "./phone.js";
 
 const BIN = fileURLToPath(new URL("../bin/grill-me.js", import.meta.url));
 
-function run(args, { input, home, server } = {}) {
+function run(args, { input, inputChunks, home, server } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN, ...args, ...(server ? ["--server", server] : [])], {
       env: { ...process.env, GRILL_ME_HOME: home },
@@ -23,8 +23,16 @@ function run(args, { input, home, server } = {}) {
     child.stderr.on("data", (d) => (stderr += d));
     child.on("error", reject);
     child.on("close", (code) => resolve({ code, stdout, stderr }));
-    if (input !== undefined) child.stdin.write(input);
-    child.stdin.end();
+    (async () => {
+      if (input !== undefined) child.stdin.write(input);
+      if (inputChunks) {
+        for (const chunk of inputChunks) {
+          child.stdin.write(chunk);
+          await new Promise((r) => setTimeout(r, 20)); // let the chunks arrive separately
+        }
+      }
+      child.stdin.end();
+    })().catch(reject);
   });
 }
 
@@ -164,4 +172,33 @@ test("mcp is a placeholder that exits 1", async (t) => {
   const r = await run(["mcp"], { home });
   assert.equal(r.code, 1);
   assert.match(r.stdout, /coming in the next release/);
+});
+
+test("send over stdin survives an emoji split across chunks", async (t) => {
+  const { home, server } = await fixture(t);
+  const emoji = "🔥🎉💥✨🚀";
+  const text = `❓ Q1 - Emoji round-trip\nDoes the body keep ${emoji} intact?\n\n➡️ Yes, it does.\n\n---\n`;
+  const buf = Buffer.from(text, "utf8");
+  const splitAt = Buffer.from(text.slice(0, text.indexOf("🔥") + 1), "utf8").length - 2; // mid-🔥
+  const r = await run(["send", "-", "--qr", "off"], {
+    inputChunks: [buf.subarray(0, splitAt), buf.subarray(splitAt)],
+    home,
+    server,
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(!r.stdout.includes("�"), "no replacement characters in the output");
+  const id = sentId(r.stdout);
+  const pending = JSON.parse(await fs.readFile(path.join(home, "pending", `${id}.json`), "utf8"));
+  assert.ok(pending.grill.questions[0].body.includes(emoji), "body kept the emoji byte-exact");
+  assert.ok(!JSON.stringify(pending).includes("�"), "no corruption in the stored grill");
+});
+
+test("send with >64 KB of emoji over stdin fails on size without corruption", async (t) => {
+  const { home, server } = await fixture(t);
+  const text = `❓ Q1 - Too big\n${"🔥".repeat(40_000)}\n\n➡️ Shrink it.\n\n---\n`;
+  assert.ok(Buffer.byteLength(text) > 64 * 1024);
+  const r = await run(["send", "-"], { input: text, home, server });
+  assert.equal(r.code, 2, "fails the body size limit");
+  assert.match(r.stderr, /4000 characters/);
+  assert.ok(!r.stderr.includes("�") && !r.stdout.includes("�"), "no replacement characters");
 });

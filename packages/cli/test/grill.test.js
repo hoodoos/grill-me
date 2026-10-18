@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DEMO_TEXT, contentHash } from "../../core/src/index.js";
-import { send, wait, fetch as fetchGrill, resend, cancel } from "../src/index.js";
+import { send, wait, check, resend, cancel } from "../src/index.js";
 import { readPending, savePending, prunePending } from "../src/pending.js";
 import { startFakeServer } from "./fake-server.js";
 import { phoneAnswer } from "./phone.js";
@@ -117,12 +117,12 @@ test("fetch → WAITING, then ANSWERS once the phone has answered", async (t) =>
   const r = await send(DEMO_TEXT, { server, home });
   const pending = await readPending(home, r.id);
 
-  const first = await fetchGrill(r.id, { home });
+  const first = await check(r.id, { home });
   assert.equal(first.status, "WAITING");
   assert.ok((await readPending(home, r.id)) !== null, "pending kept while waiting");
 
   await phoneAnswer(server, r.id, pending.secret, PICKS);
-  const second = await fetchGrill(r.id, { home });
+  const second = await check(r.id, { home });
   assert.equal(second.status, "ANSWERS");
   assert.equal(second.lines, EXPECTED_LINES);
   assert.equal(fake.grill(r.id), undefined);
@@ -133,7 +133,7 @@ test("fetch → EXPIRED", async (t) => {
   const { home, server, fake } = await fixture(t);
   const r = await send(DEMO_TEXT, { server, home });
   fake.expire(r.id);
-  assert.equal((await fetchGrill(r.id, { home })).status, "EXPIRED");
+  assert.equal((await check(r.id, { home })).status, "EXPIRED");
 });
 
 test("resend: new id and new secret, same contentHash, old pending removed, old grill deleted", async (t) => {
@@ -170,7 +170,7 @@ test("cancel: DELETEs and removes the pending file; 404 counts as success", asyn
 
 test("an unknown id says the grill came from another machine or was already fetched", async (t) => {
   const { home } = await fixture(t);
-  for (const op of [wait, fetchGrill, resend, cancel]) {
+  for (const op of [wait, check, resend, cancel]) {
     await assert.rejects(() => op("Abcd1234_efgh-ij", { home }), {
       code: "unknown-id",
       message: /another machine|already fetched/,
@@ -214,4 +214,64 @@ test("every command prunes stale pending files", async (t) => {
   await savePending(home, stale);
   await send(DEMO_TEXT, { server, home });
   assert.equal(await readPending(home, stale.id), null, "send pruned the stale file");
+});
+
+test("wait caps each poll at the remaining seconds", async (t) => {
+  const { home, server, fake } = await fixture(t);
+  const r = await send(DEMO_TEXT, { server, home });
+  const result = await wait(r.id, { home, seconds: 2.5, pollSeconds: 50 });
+  assert.equal(result.status, "WAITING");
+  const params = fake.waitParams(r.id);
+  assert.ok(params.length >= 2, `expected several polls, got ${params.length}`);
+  assert.equal(params[0], 3, "ceil(2.5 s remaining) caps the first poll below pollSeconds=50");
+  assert.ok(params.every((p) => p <= 3), `no poll overshoots the budget: ${params}`);
+});
+
+test("metrics: user-agent header and question-count bucket on every request", async (t) => {
+  const { home, server, fake } = await fixture(t);
+  const savedAgent = process.env.GRILL_ME_AGENT;
+  const savedClaude = process.env.CLAUDECODE;
+  delete process.env.GRILL_ME_AGENT;
+  delete process.env.CLAUDECODE;
+  t.after(() => {
+    if (savedAgent === undefined) delete process.env.GRILL_ME_AGENT;
+    else process.env.GRILL_ME_AGENT = savedAgent;
+    if (savedClaude === undefined) delete process.env.CLAUDECODE;
+    else process.env.CLAUDECODE = savedClaude;
+  });
+  // POST /api/g requests, with the user-agent and qb the fake server recorded
+  const creates = () => fake.requests().filter((x) => x.method === "POST" && x.path === "/api/g");
+
+  // the explicit option wins, and every request of the roundtrip carries the header
+  const r = await send(DEMO_TEXT, { server, home, agent: "test-agent" });
+  const pending = await readPending(home, r.id);
+  const answering = sleep(150).then(() => phoneAnswer(server, r.id, pending.secret, PICKS));
+  assert.equal((await wait(r.id, { home, agent: "test-agent" })).status, "ANSWERS");
+  await answering;
+  // the CLI's requests are create/poll/delete; the phone's (GET grill, POST answers) are not
+  const agents = fake
+    .requests()
+    .filter((x) => !(x.method === "GET" && /^\/api\/g\/[^/]+$/.test(x.path)) && !(x.method === "POST" && x.path.endsWith("/answers")))
+    .map((x) => x.userAgent);
+  assert.ok(agents.length >= 3, "create, poll(s), delete");
+  assert.ok(agents.every((a) => a === "grill-me-ai/0.1.0 (test-agent)"), agents.join(", "));
+  assert.equal(creates().at(-1).qb, "4-6", "DEMO_TEXT has 4 questions");
+
+  // $GRILL_ME_AGENT is used when no option is passed
+  process.env.GRILL_ME_AGENT = "ci-runner";
+  await send(DEMO_TEXT, { server, home });
+  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0 (ci-runner)");
+
+  // an invalid $GRILL_ME_AGENT is dropped; CLAUDECODE=1 is the fallback
+  process.env.GRILL_ME_AGENT = "INVALID AGENT!";
+  process.env.CLAUDECODE = "1";
+  await send(DEMO_TEXT, { server, home });
+  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0 (claude-code)");
+
+  // nothing detected → no parenthesis
+  delete process.env.GRILL_ME_AGENT;
+  delete process.env.CLAUDECODE;
+  await send({ questions: [{ title: "Only one" }] }, { server, home });
+  assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0");
+  assert.equal(creates().at(-1).qb, "1");
 });

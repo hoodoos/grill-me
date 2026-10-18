@@ -7,11 +7,11 @@ import { isId, hashWriteToken } from "../../core/src/index.js";
 const HOUR = 3600_000;
 
 export async function startFakeServer({ maxWait = 0.2 } = {}) {
-  const grills = new Map(); // id → { ct, iv, writeHash, ans, createdAt, expiresAt }
+  const grills = new Map(); // id → { ct, iv, writeHash, ans, createdAt, expiresAt, qb }
   const waiters = new Map(); // id → Set<{ res, timer }>
+  const requests = []; // every request: { method, path, userAgent }
   let failNextCount = 0;
   let conflictNextCount = 0;
-  let createAttempts = 0;
 
   const gone = (g) => !g || g.expiresAt <= Date.now();
 
@@ -47,25 +47,26 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
       res.end(obj ? JSON.stringify(obj) : undefined);
     };
     try {
+      const url = new URL(req.url, "http://fake");
+      const parts = url.pathname.split("/").filter(Boolean);
+      requests.push({ method: req.method, path: url.pathname, userAgent: req.headers["user-agent"] });
       if (failNextCount > 0) {
         failNextCount--;
         return send(500, { error: "injected failure" });
       }
-      const url = new URL(req.url, "http://fake");
-      const parts = url.pathname.split("/").filter(Boolean);
 
       if (req.method === "POST" && url.pathname === "/api/g") {
         const body = await readBody(req);
-        createAttempts++;
+        requests.at(-1).qb = body.qb;
         if (!isId(body.id)) return send(400, { error: "bad id" });
         if (conflictNextCount > 0) {
           conflictNextCount--;
           return send(409, { error: "id taken" });
         }
         if (grills.has(body.id) && !gone(grills.get(body.id))) return send(409, { error: "id taken" });
-        const expiresAt = Date.now() + HOUR;
+        const expiresAt = Date.now() + HOUR; // epoch milliseconds, the milestone-2 contract
         grills.set(body.id, { ct: body.ct, iv: body.iv, writeHash: body.writeHash, ans: null, createdAt: Date.now(), expiresAt });
-        return send(201, { id: body.id, expiresAt: new Date(expiresAt).toISOString() });
+        return send(201, { id: body.id, expiresAt });
       }
 
       const id = parts[0] === "api" && parts[1] === "g" ? parts[2] : null;
@@ -76,7 +77,7 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
 
       if (req.method === "GET" && parts.length === 3) {
         if (gone(g)) return send(404, { error: "gone" });
-        return send(200, { ct: g.ct, iv: g.iv, answered: !!g.ans, expiresAt: new Date(g.expiresAt).toISOString() });
+        return send(200, { ct: g.ct, iv: g.iv, answered: !!g.ans, expiresAt: g.expiresAt });
       }
       if (req.method === "POST" && parts[3] === "answers") {
         if (gone(g)) return send(404, { error: "gone" });
@@ -91,7 +92,10 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
       if (req.method === "GET" && parts[3] === "answers") {
         if (gone(g)) return send(404, { error: "gone" });
         if (g.ans) return send(200, g.ans);
-        const waitMs = Math.min(Number(url.searchParams.get("wait")) || 0, maxWait) * 1000;
+        const waitParam = Number(url.searchParams.get("wait")) || 0;
+        g.waitParams = g.waitParams || [];
+        g.waitParams.push(waitParam);
+        const waitMs = Math.min(waitParam, maxWait) * 1000;
         if (waitMs <= 0) return send(204);
         let set = waiters.get(id);
         if (!set) waiters.set(id, (set = new Set()));
@@ -122,7 +126,9 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
   return {
     url: `http://127.0.0.1:${port}`,
     grill: (id) => grills.get(id),
-    creates: () => createAttempts,
+    creates: () => requests.filter((r) => r.method === "POST" && r.path === "/api/g").length,
+    requests: () => requests,
+    waitParams: (id) => grills.get(id)?.waitParams ?? [],
     failNext: (n = 1) => {
       failNextCount = n;
     },

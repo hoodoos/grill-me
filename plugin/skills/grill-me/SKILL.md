@@ -38,8 +38,9 @@ npx -y grill-me-ai send - <<'EOF'
 EOF
 ```
 
-Put **the link and the QR from its output, inside a code block**, in your reply, so the user can
-open or scan them.
+Put **the link from its output on its own line as plain text** in your reply (so it's clickable
+wherever markdown renders), and **the QR inside a code block**. Keep the `id`: `cancel`, `resend`
+and `fetch` need it.
 
 ## 3. Wait for the answers in the background
 
