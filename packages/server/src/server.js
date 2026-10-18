@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { isId, b64urlDecode, b64urlEncode, hashWriteToken, LIMITS } from "../../core/src/index.js";
+import { wantsMarkdown, loadInstall } from "./install.js";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(SRC, "..", "public");
@@ -227,6 +228,25 @@ export function createServer(options = {}) {
     send(res, status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify(obj));
   const sendEmpty = (res, status) => send(res, status, { "cache-control": "no-store" });
   const badRequest = (res, error) => sendJson(res, 400, { error });
+
+  // ---------- install guide (milestone 2, phase 3): one render at startup ----------
+  // The guide's CSP overrides the default via writeHead (its headers win over setHeader).
+  const install = loadInstall(path.join(PUBLIC_DIR, "index.html"));
+  const GUIDE_HEADERS = {
+    "content-type": "text/plain; charset=utf-8",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+    "cache-control": "public, max-age=300",
+  };
+  const sendText = (req, res, text, vary) => {
+    const headers = vary ? { ...GUIDE_HEADERS, vary: "Accept, User-Agent" } : GUIDE_HEADERS;
+    send(res, 200, headers, req.method === "HEAD" ? undefined : text);
+  };
+  const serveHomepage = (req, res) =>
+    send(res, 200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "public, max-age=300",
+      vary: "Accept, User-Agent",
+    }, req.method === "HEAD" ? undefined : install.homepage);
 
   const decLen = (s) => {
     try { return typeof s === "string" ? b64urlDecode(s).length : -1; } catch { return -1; }
@@ -505,6 +525,15 @@ export function createServer(options = {}) {
         return sendEmpty(res, 405);
       }
       if (p.startsWith("/api/")) return sendEmpty(res, 404);
+      // ---------- install routes (phase 3); nginx serves these from the static tree ----------
+      if (p === "/install" || p === "/llms.txt" || p === "/") {
+        if (req.method !== "GET" && req.method !== "HEAD") return sendEmpty(res, 405);
+        if (p === "/install") return sendText(req, res, install.guide, false);
+        if (p === "/llms.txt") return sendText(req, res, install.llms, false);
+        return wantsMarkdown(req.headers.accept, req.headers["user-agent"])
+          ? sendText(req, res, install.guide, true)
+          : serveHomepage(req, res);
+      }
       return await serveStatic(req, res, p);
     } catch (e) {
       if (e.status === 413) return sendJson(res, 413, { error: "body too large" });
