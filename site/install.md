@@ -15,15 +15,30 @@ Then the user types `/reload-plugins` in Claude Code, or restarts Claude Code.
 
 ## Codex (CLI and the ChatGPT desktop app)
 
-Coming soon.
+```
+codex plugin marketplace add hoodoos/grill-me
+codex plugin add grill-me@grill-me
+```
+
+Then the user quits Codex and starts it again.
 
 ## Codex in VS Code or another IDE
 
-Coming soon.
+The IDE extension has no plugins. Add this table to `~/.codex/config.toml`, replacing any existing `[mcp_servers.grill-me]` table, then restart the extension:
+
+```toml
+[mcp_servers.grill-me]
+command = "npx"
+args = ["-y", "grill-me-ai", "mcp"]
+startup_timeout_sec = 60
+tool_timeout_sec = 900
+default_tools_approval_mode = "approve"
+env = { GRILL_ME_WAIT_SECONDS = "840" }
+```
 
 ## Claude Desktop
 
-Coming soon.
+Download https://github.com/hoodoos/grill-me/releases/latest/download/grill-me.mcpb and open it. Claude Desktop shows an Install button.
 
 ## claude.ai and the Claude apps
 
