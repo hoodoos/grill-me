@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Grill Me: install or update on the DigitalOcean box. One script for both; safe to re-run.
+# Run it as root:   bash deploy.sh [git-ref]      (default: main)
+#
+# What it does, in order:
+#   1. Preflight (changes nothing) + a "before" snapshot of the neighbours for check.sh
+#   2. Node 24 under /opt/grill-me/node (the system Node is never touched)
+#   3. The grill-me system user
+#   4. Clone the ref into /opt/grill-me/releases/<short-sha>, npm ci, run the tests, build static
+#   5. Point /opt/grill-me/current at it; sync the static tree into /var/www/grill-me.ai
+#   6. nginx: log format + locations snippet + one include line in the 443 block, then reload
+#   7. systemd unit; wait for the API to answer
+#   8. deploy/check.sh (site, long poll through nginx, neighbours unchanged)
+set -euo pipefail
+
+REF="${1:-main}"
+REPO="https://github.com/hoodoos/grill-me"
+OPT=/opt/grill-me
+DATA=/var/lib/grill-me
+WWW=/var/www/grill-me.ai
+SITE=/etc/nginx/sites-available/grill-me.ai
+SNIPPET=/etc/nginx/snippets/grill-me.ai-locations.conf
+LOGFMT=/etc/nginx/conf.d/grill-me-logformat.conf
+UNIT=/etc/systemd/system/grill-me.service
+BEFORE="$OPT/before"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+step() { printf '\n== %s\n' "$*"; }
+die() { echo "FAIL: $*" >&2; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "run as root"
+
+# ---------- 1. preflight (changes nothing) ----------
+step "preflight"
+. /etc/os-release
+[ "${ID:-}" = "ubuntu" ] || die "not Ubuntu ($ID)"
+case "$(uname -m)" in x86_64) ARCH=x64 ;; aarch64) ARCH=arm64 ;; *) die "unsupported arch $(uname -m)" ;; esac
+nginx -t
+if ss -ltn | grep -q '127\.0\.0\.1:8787 '; then
+  systemctl is-active --quiet grill-me || die "port 8787 is held by something that isn't grill-me"
+fi
+[ -f "$SITE" ] || die "site file $SITE missing"
+[ -L /etc/nginx/sites-enabled/zz-grill-me.ai ] || die "the zz-grill-me.ai link is missing"
+
+step "before snapshot → $BEFORE"
+mkdir -p "$BEFORE"
+ss -ltnu > "$BEFORE/ports"
+systemctl list-units --type=service --state=active --no-legend | awk '{print $1}' | sort > "$BEFORE/units"
+echo | openssl s_client -connect cor.ryaboshtan.com:443 -servername cor.ryaboshtan.com 2>/dev/null | openssl x509 -noout -subject > "$BEFORE/neighbour-cor.subject" || true
+curl -k -s -o /dev/null -m 10 -w '%{http_code}' https://cor.ryaboshtan.com/ > "$BEFORE/neighbour-cor.code" || true
+echo | openssl s_client -connect 46-101-88-204.sslip.io:443 -servername 46-101-88-204.sslip.io 2>/dev/null | openssl x509 -noout -subject > "$BEFORE/neighbour-sslip.subject" || true
+curl -k -s -o /dev/null -m 10 -w '%{http_code}' https://46-101-88-204.sslip.io/ > "$BEFORE/neighbour-sslip.code" || true
+echo | openssl s_client -connect 46.101.88.204:443 -servername 46.101.88.204 2>/dev/null | openssl x509 -noout -subject > "$BEFORE/neighbour-ip.subject" || true
+curl -k -s -o /dev/null -m 10 -w '%{http_code}' https://46.101.88.204/ > "$BEFORE/neighbour-ip.code" || true
+echo | openssl s_client -connect 46.101.88.204:443 -noservername 2>/dev/null | openssl x509 -noout -subject > "$BEFORE/default-cert.subject" || true
+curl -k -s -o /dev/null -m 10 -w '%{http_code}' https://www.grill-me.ai/ > "$BEFORE/www.code" || true
+
+# ---------- 2. Node 24 under /opt/grill-me (system Node untouched) ----------
+step "node 24"
+mkdir -p "$OPT"
+SHASUMS=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt)
+TARBALL=$(grep "linux-$ARCH.tar.xz$" <<<"$SHASUMS" | awk '{print $2}')
+[ -n "$TARBALL" ] || die "no linux-$ARCH tarball in SHASUMS256.txt"
+VER=${TARBALL#node-v}; VER=${VER%%-linux-*}
+if [ "$(readlink "$OPT/node" || true)" != "$OPT/node-$VER" ]; then
+  echo "installing node $VER ($ARCH)"
+  curl -fsSL "https://nodejs.org/dist/latest-v24.x/$TARBALL" -o "/tmp/$TARBALL"
+  (cd /tmp && grep " $TARBALL\$" <<<"$SHASUMS" | sha256sum -c -)
+  tar -xJf "/tmp/$TARBALL" -C "$OPT"
+  rm "/tmp/$TARBALL"
+  ln -sfn "$OPT/node-$VER" "$OPT/node"
+else
+  echo "node $VER already current"
+fi
+NODE="$OPT/node/bin/node"
+"$NODE" --version
+
+# ---------- 3. the grill-me system user ----------
+step "user"
+if ! id grill-me >/dev/null 2>&1; then
+  useradd --system --no-create-home --shell /usr/sbin/nologin grill-me
+fi
+mkdir -p "$DATA"
+chown grill-me:grill-me "$DATA"
+
+# ---------- 4. the release ----------
+step "release ($REF)"
+mkdir -p "$OPT/releases"
+SHA=$(git ls-remote "$REPO" "$REF" "$REF^{}" | head -1 | awk '{print $1}')
+[ -n "$SHA" ] || die "ref $REF not found in $REPO"
+SHORT=${SHA:0:12}
+REL="$OPT/releases/$SHORT"
+if [ ! -d "$REL" ]; then
+  git clone --quiet --depth 1 --branch "$REF" "$REPO" "$REL" 2>/dev/null || {
+    git clone --quiet --depth 1 "$REPO" "$REL"
+    git -C "$REL" fetch --quiet --depth 1 origin "$SHA"
+    git -C "$REL" checkout --quiet FETCH_HEAD
+  }
+  (cd "$REL" && PATH="$OPT/node/bin:$PATH" npm ci --omit=dev)
+  (cd "$REL" && "$NODE" --test)
+  (cd "$REL" && "$NODE" packages/server/scripts/build-static.mjs "$REL/static")
+  chown -R root:root "$REL"
+else
+  echo "release $SHORT already built"
+fi
+
+# ---------- 5. switch ----------
+step "switch to $SHORT"
+if [ -L "$OPT/current" ]; then readlink "$OPT/current" > "$OPT/previous"; fi
+ln -sfn "$REL" "$OPT/current"
+if [ ! -e "$WWW/.grill-me" ]; then
+  [ -d "$WWW" ] && mv "$WWW" "$WWW.placeholder"
+  mkdir -p "$WWW"
+fi
+cp -a "$REL/static/." "$WWW/"
+touch "$WWW/.grill-me"
+
+# ---------- 6. nginx ----------
+step "nginx"
+mkdir -p /etc/nginx/snippets
+cp "$REL/deploy/nginx/grill-me-logformat.conf" "$LOGFMT"
+BAK="$SITE.bak-$(date +%Y%m%d%H%M%S)"
+cp "$SITE" "$BAK"
+[ ! -f "$SNIPPET" ] || cp "$SNIPPET" "$BAK.snippet"
+cp "$REL/deploy/nginx/grill-me.ai-locations.conf" "$SNIPPET"
+if ! grep -q 'grill-me.ai-locations.conf' "$SITE"; then
+  # Add the include to the 443 block by pattern (the live file may differ from any patch):
+  # buffer each server block; the one with "listen 443 ssl" and "server_name grill-me.ai"
+  # loses its bare "location / { ... }" block and gains the include line.
+  awk '
+    /^server[ \t]*[{]/ { depth=1; buf=$0 ORS; is443=0; next }
+    depth {
+      if (/listen[ \t]+443[ \t]+ssl/) is443=1
+      buf=buf $0 ORS
+      if (/^[ \t]*[}]/) {
+        depth=0
+        if (is443 && buf ~ /server_name[ \t]+[^;]*grill-me\.ai/) {
+          gsub(/[ \t]*location[ \t]+\/[ \t]+[{][^}]*[}]\n/, "", buf)
+          sub(/\n[ \t]*[}]\n$/, "\n    include /etc/nginx/snippets/grill-me.ai-locations.conf;\n}\n", buf)
+        }
+        printf "%s", buf
+        next
+      }
+      next
+    }
+    { print }
+  ' "$SITE" > "$SITE.new"
+  diff -u "$SITE" "$SITE.new" || true
+  mv "$SITE.new" "$SITE"
+fi
+if ! nginx -t; then
+  echo "nginx -t failed; restoring the site file and the previous snippet" >&2
+  cp "$BAK" "$SITE"
+  if [ -f "$BAK.snippet" ]; then cp "$BAK.snippet" "$SNIPPET"; else rm -f "$SNIPPET"; fi
+  exit 1
+fi
+systemctl reload nginx
+
+# ---------- 7. systemd ----------
+step "systemd"
+cp "$REL/deploy/grill-me.service" "$UNIT"
+systemctl daemon-reload
+systemctl enable grill-me >/dev/null
+systemctl restart grill-me
+RID=$("$NODE" -e 'console.log(require("crypto").randomBytes(12).toString("base64url"))')
+for i in $(seq 1 30); do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8787/api/g/$RID" || true)
+  [ "$code" = "404" ] && break
+  sleep 1
+done
+[ "$code" = "404" ] || die "the API didn't come up on 127.0.0.1:8787"
+echo "API answers on 127.0.0.1:8787"
+
+# ---------- 8. checks ----------
+step "checks"
+GRILL_ME_NODE="$NODE" CHECK_LIVE="$REL/packages/server/scripts/check-live.mjs" \
+  bash "$HERE/check.sh" "$BEFORE"

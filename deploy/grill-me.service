@@ -1,0 +1,43 @@
+[Unit]
+Description=Grill Me server (grill-me.ai API)
+After=network.target
+
+[Service]
+User=grill-me
+Group=grill-me
+WorkingDirectory=/opt/grill-me/current
+ExecStart=/opt/grill-me/node/bin/node --max-old-space-size=64 /opt/grill-me/current/packages/server/src/main.js
+Environment=PORT=8787
+Environment=HOST=127.0.0.1
+Environment=GRILL_ME_DB=/var/lib/grill-me/grill-me.db
+Environment=NODE_ENV=production
+StateDirectory=grill-me
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+LimitNOFILE=65536
+
+# Caps: the box also runs a live game server; the game always wins.
+MemoryMax=256M
+CPUQuota=25%
+Nice=10
+IOSchedulingClass=idle
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/grill-me
+PrivateTmp=yes
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
