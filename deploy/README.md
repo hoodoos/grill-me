@@ -32,6 +32,23 @@ snapshotted. A patch or validation failure restores their prior bytes, including
 previously absent files absent. Only numeric `site.bak-<timestamp>` backups are eligible for
 site restoration; snippet/http snapshots cannot be mistaken for a site file.
 
+Deployment normalizes public Node, release and copied static trees independently of an
+operator's inherited umask. An already-complete release is repaired too. Physical traversal
+does not follow workspace symlinks, and executable bits are preserved; Node must validate
+before its tree is repaired. Data stays service-owned `0700`, the env file root/service-group
+`0640`, and the unit uses `UMask=0077` with `StateDirectoryMode=0700`.
+
+Startup/restart failure prints bounded state/exit fields, the current attempt's journal tail
+(stats token redacted before truncation), and selected path owners/modes. It never dumps the
+environment. Local readiness requests have connection and total timeouts.
+
+For the real unit regression, use an **isolated local Linux systemd machine**, as root with
+Node 24: `GRILL_ME_SYSTEMD_SMOKE=1 node --test packages/server/test/startup.test.js`.
+It stages fresh `022`, fresh `077` and already-complete `077` releases, runs real Node under
+the shipped hardening, checks nginx-user reads and data/env privacy, then removes its units
+and fixtures. This opt-in test is skipped in ordinary suites; Linux mode/diagnostic tests run
+without it. Windows skips those POSIX tests.
+
 The site file is `/etc/nginx/sites-available/grill-me.ai`, enabled as
 `/etc/nginx/sites-enabled/zz-grill-me.ai`. Keep the `zz-` link name: it keeps the other sites as
 the per-port defaults. Never add `default_server`.
