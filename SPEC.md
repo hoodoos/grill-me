@@ -35,15 +35,19 @@ DELETE ────────────────────────�
 ## Link and keys
 
 - Link: `https://grill-me.ai/g/<id>#<secret>`
-  - `id`: 12 random bytes, base64url (16 chars). The server picks it.
+  - `id`: 12 random bytes, base64url (16 chars). The agent picks it, because the blob's AAD needs the `id` before
+    upload. The server rejects any `id` that isn't exactly 16 base64url characters and answers `409` if it's
+    taken; the agent then picks a new one.
   - `secret`: 16 random bytes, base64url (22 chars). The agent creates it. It sits after `#`, so browsers
     never send it to the server.
   - The whole link is about 60 characters, which makes a small QR code that's easy to scan from a terminal.
-- Two keys come from the `secret`, using HKDF-SHA256 (Web Crypto, so the same code runs in Node and browsers):
+- Two keys come from the `secret`, using HKDF-SHA256 with an empty salt (Web Crypto, so the same code runs in
+  Node and browsers). Test vectors are in `packages/core/test/fixtures/crypto-vectors.json`:
   - `encKey` = HKDF(secret, info `grill-me/v1/enc`): AES-256-GCM. Each blob gets a random 12-byte IV, and the
     AAD is `id + ":grill"` or `id + ":answers"`, so a blob can't be moved to another grill or slot.
   - `writeToken` = HKDF(secret, info `grill-me/v1/write`), 32 bytes. When the grill is created, the server
-    receives only `SHA-256(writeToken)`. Posting answers and deleting the grill both need the token itself.
+    receives only `SHA-256(writeToken)` (`writeHash`, both base64url). Posting answers and deleting the grill both
+    need the token itself.
 - Anyone with the full link can read and answer the grill. Anyone with only the `id` gets encrypted data they
   can't read, and can't post answers.
 
@@ -66,10 +70,12 @@ DELETE ────────────────────────�
 
 // Answers: what the phone encrypts and posts
 { "v": 1, "answers": [{ "n": 14, "kind": "agree" | "choice" | "own" | "skip", "choice": "Parsed", "text": "..." }] }
+// For a multi question, "choice" is an array of names.
 ```
 
 The agent receives answers as plain lines, one per question, the same lines the hub uses:
-`Q14 - agree`, `Q14 - Parsed`, `Q14 - skip for now`, `Q14 - <own words>`.
+`Q14 - agree`, `Q14 - Parsed`, `Q14 - skip for now, ask again later`, `Q14 - <own words>`. A multi answer lists
+its names joined with `, `. A question left unanswered is sent as skipped.
 
 ### Input formats (converters)
 
@@ -98,7 +104,7 @@ only 22, 80 and 443.
 
 | Route | Auth | Result |
 |---|---|---|
-| `POST /api/g` `{ct, iv, writeHash}` | — | `201 {id, expiresAt}` |
+| `POST /api/g` `{id, ct, iv, writeHash}` | — | `201 {id, expiresAt}` · `409` id taken |
 | `GET /api/g/:id` | — | `200 {ct, iv, answered, expiresAt}` · `404` |
 | `POST /api/g/:id/answers` `{ct, iv}` | `Bearer writeToken` | `204` · `409` already answered · `404` |
 | `GET /api/g/:id/answers?wait=50` | — | `200 {ct, iv}` · `204` nothing yet · `404` expired or deleted |
@@ -200,7 +206,8 @@ packages/cli      grill-me-ai       CLI + MCP server (the installed command is `
 plugin/           Claude Code plugin: skill + .mcp.json
 ```
 
-npm workspaces, Node 24 LTS, ES modules, tests run with `node --test`.
+npm workspaces, ES modules, tests run with `node --test`. The server targets Node 24 LTS (for `node:sqlite`). The
+`grill-me-ai` package declares `engines` `>=22`, because it runs on users' machines through `npx`. CI tests both.
 
 Published to npm as **one package, `grill-me-ai`**: the CLI and MCP server, plus subpath exports `grill-me-ai/core`
 and `grill-me-ai/ui`, which Agent Hub imports. `packages/core` and `packages/ui` are workspaces bundled into it,
