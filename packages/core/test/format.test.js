@@ -66,7 +66,7 @@ test("body: default empty, outer blank lines trimmed, inner kept, capped", () =>
 
 test("choices: defaults, bare strings, name rules, uniqueness", () => {
   assert.deepEqual(ok(base).questions[0].choices, []);
-  const g = ok({ questions: [{ title: "a", choices: [" one ", { name: "Two", detail: "d" }] }] });
+  const g = ok({ questions: [{ title: "a", choices: [" one ", { name: "Two", detail: "  d  " }] }] });
   assert.deepEqual(g.questions[0].choices, [{ name: "one", detail: "" }, { name: "Two", detail: "d" }]);
   bad({ questions: [{ title: "a", choices: [{}] }] }, /choices\[0\]\.name: required/);
   bad({ questions: [{ title: "a", choices: ["  "] }] }, /name: required/);
@@ -79,7 +79,7 @@ test("choices: defaults, bare strings, name rules, uniqueness", () => {
 
 test("recommend: default null, choice matched case-insensitively, both empty means null", () => {
   assert.equal(ok(base).questions[0].recommend, null);
-  const g = ok({ questions: [{ title: "a", choices: ["Alpha", "Beta"], recommend: { choice: "alpha", why: "best" } }] });
+  const g = ok({ questions: [{ title: "a", choices: ["Alpha", "Beta"], recommend: { choice: "alpha", why: "\n\nbest\n" } }] });
   assert.deepEqual(g.questions[0].recommend, { choice: "Alpha", why: "best" });
   const whyOnly = ok({ questions: [{ title: "a", recommend: { why: "because" } }] });
   assert.deepEqual(whyOnly.questions[0].recommend, { choice: null, why: "because" });
@@ -118,4 +118,16 @@ test("GRILL_SCHEMA describes the input form", () => {
     assert.ok(q.properties[field].description, `${field} description`);
   }
   assert.equal(GRILL_SCHEMA.properties.questions.maxItems, LIMITS.questions);
+});
+
+test("GRILL_SCHEMA: every type is a single string (no unions)", () => {
+  const walk = (node, path) => {
+    if (node === null || typeof node !== "object") return;
+    if ("type" in node) assert.equal(typeof node.type, "string", `${path}.type`);
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "properties" && v && typeof v === "object") for (const [name, sub] of Object.entries(v)) walk(sub, `${path}.${name}`);
+      else if (k === "items") walk(v, `${path}.items`);
+    }
+  };
+  walk(GRILL_SCHEMA, "schema");
 });

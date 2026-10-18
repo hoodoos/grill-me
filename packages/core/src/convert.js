@@ -1,10 +1,8 @@
 // Any question format in, one internal format out. Every successful path ends in validateGrill.
-import { parseGrill } from "./grill-text.js";
+import { parseGrill, FENCE, OPTION } from "./grill-text.js";
 import { GRILL_SCHEMA, validateGrill } from "./format.js";
 
 const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
-const FENCE = /^\s{0,3}(```|~~~)/;
-const OPTION = /^\s{0,3}[-*•]\s+(?:\*\*|__)(.+?)(?:\*\*|__)/; // same as grill-text.js, for the detail re-scan
 const BULLET = /^\s*[-*•]\s/;
 
 // Trim outer blank lines; collapse runs of 3+ newlines to 2.
@@ -76,7 +74,7 @@ const mapPicker = (obj, { multi }) => {
   if (!Array.isArray(qs) || !qs.length) return null;
   return {
     questions: qs.map((q, i) => {
-      const options = (q.options || []).map((o) => (isObject(o) ? { label: o.label, description: o.description } : { label: o, description: undefined }));
+      const options = (q.options || []).map((o) => (isObject(o) ? { label: o.label ?? o.name ?? o.value ?? "", description: o.description } : { label: o, description: undefined }));
       const cleaned = options.map((o) => ({ ...cleanLabel(o.label), detail: o.description || "" }));
       const rec = cleaned.find((c) => c.recommended);
       return {

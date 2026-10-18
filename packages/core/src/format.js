@@ -34,9 +34,9 @@ export const GRILL_SCHEMA = {
           choices: {
             type: "array",
             maxItems: LIMITS.choices,
-            description: "Tappable options; a bare string means { name } with no detail.",
+            description: "Tappable options.",
             items: {
-              type: ["object", "string"],
+              type: "object",
               properties: {
                 name: { type: "string", maxLength: LIMITS.choiceNameChars, description: "Short choice name, unique within the question." },
                 detail: { type: "string", maxLength: LIMITS.choiceDetailChars, description: "What picking this choice means." },
@@ -45,10 +45,10 @@ export const GRILL_SCHEMA = {
             },
           },
           recommend: {
-            type: ["object", "null"],
-            description: "The choice you advise, or null for no recommendation.",
+            type: "object",
+            description: "The choice you advise. Omit for no recommendation.",
             properties: {
-              choice: { type: ["string", "null"], description: "The name of the recommended choice, or null." },
+              choice: { type: "string", description: "Name of the recommended choice; omit if none." },
               why: { type: "string", maxLength: LIMITS.whyChars, description: "Why you recommend it." },
             },
           },
@@ -156,7 +156,7 @@ export function validateGrill(input) {
         if (co.detail !== undefined) {
           if (typeof co.detail !== "string") err(`${cpath}.detail`, "must be a string");
           else {
-            detail = co.detail;
+            detail = co.detail.trim();
             if (detail.length > LIMITS.choiceDetailChars) err(`${cpath}.detail`, `at most ${LIMITS.choiceDetailChars} characters`);
           }
         }
@@ -182,7 +182,7 @@ export function validateGrill(input) {
         if (r.why !== undefined) {
           if (typeof r.why !== "string") err(`${path}.recommend.why`, "must be a string");
           else {
-            why = r.why;
+            why = trimBlankLines(r.why);
             if (why.length > LIMITS.whyChars) err(`${path}.recommend.why`, `at most ${LIMITS.whyChars} characters`);
           }
         }

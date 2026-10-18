@@ -181,6 +181,16 @@ test("Codex isSecret refuses the whole conversion", () => {
   assert.ok(r.schema);
 });
 
+test("picker option without a label ends in the validator's name error", () => {
+  const r = convert({ questions: [{ question: "Pick?", options: [{ description: "no label" }, "fine"] }] });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /name: required/);
+  // label ?? name ?? value fallbacks
+  const alt = convert({ questions: [{ question: "Pick?", options: [{ name: "ByName" }, { value: "ByValue" }] }] });
+  assert.ok(alt.ok, alt.error);
+  assert.deepEqual(alt.grill.questions[0].choices, [{ name: "ByName", detail: "" }, { name: "ByValue", detail: "" }]);
+});
+
 test("internal-format JSON as text, fenced and unfenced", () => {
   const grill = { v: 1, title: "T", questions: [{ n: 4, title: "Q?", choices: ["a", { name: "b", detail: "d" }] }] };
   const plain = convert(JSON.stringify(grill));
