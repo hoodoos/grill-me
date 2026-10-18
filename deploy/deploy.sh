@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Grill Me: install or update on the DigitalOcean box. One script for both; safe to re-run.
-# Run it as root:   bash deploy.sh [git-ref]      (default: main)
+# Run it as root:   bash deploy.sh [git-ref-or-full-sha]      (default: main)
 #
 # What it does, in order:
 #   1. Preflight (changes nothing) + a "before" snapshot of the neighbours for check.sh
 #   2. Node 24 under /opt/grill-me/node (the system Node is never touched)
 #   3. The grill-me system user
 #   4. Clone the ref into /opt/grill-me/releases/<short-sha>, npm ci, run the tests, build static
-#   5. nginx: log format + locations snippet + one include line in the 443 block, then reload —
+#   5. nginx: http config (log format + markdown map) + locations snippet + one include line in
+#      the 443 block, then reload —
 #      before anything is switched, so a failed `nginx -t` leaves the box exactly as it was
 #   6. Point /opt/grill-me/current at the release; sync the static tree into /var/www/grill-me.ai
 #   7. systemd unit; wait for the API to answer
-#   8. deploy/check.sh (site, long poll through nginx, neighbours unchanged)
+#   8. the release's deploy/check.sh (site, long poll through nginx, neighbours unchanged)
 set -euo pipefail
 
 REF="${1:-main}"
@@ -21,7 +22,7 @@ DATA=/var/lib/grill-me
 WWW=/var/www/grill-me.ai
 SITE=/etc/nginx/sites-available/grill-me.ai
 SNIPPET=/etc/nginx/snippets/grill-me.ai-locations.conf
-LOGFMT=/etc/nginx/conf.d/grill-me-logformat.conf
+HTTPCONF=/etc/nginx/conf.d/grill-me-http.conf
 UNIT=/etc/systemd/system/grill-me.service
 BEFORE="$OPT/before"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,20 +90,31 @@ chown grill-me:grill-me "$DATA"
 # ---------- 4. the release ----------
 step "release ($REF)"
 mkdir -p "$OPT/releases"
-SHA=$(git ls-remote "$REPO" "$REF" "$REF^{}" | head -1 | awk '{print $1}')
-[ -n "$SHA" ] || die "ref $REF not found in $REPO"
+if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+  SHA=$REF # an exact commit; GitHub serves reachable shas
+else
+  SHA=$(git ls-remote "$REPO" "$REF" "$REF^{}" | head -1 | awk '{print $1}')
+  [ -n "$SHA" ] || die "ref $REF not found in $REPO"
+fi
 SHORT=${SHA:0:12}
 REL="$OPT/releases/$SHORT"
 if [ ! -d "$REL" ]; then
-  git clone --quiet --depth 1 --branch "$REF" "$REPO" "$REL" 2>/dev/null || {
+  if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
     git clone --quiet --depth 1 "$REPO" "$REL"
     git -C "$REL" fetch --quiet --depth 1 origin "$SHA"
     git -C "$REL" checkout --quiet FETCH_HEAD
-  }
+  else
+    git clone --quiet --depth 1 --branch "$REF" "$REPO" "$REL" 2>/dev/null || {
+      git clone --quiet --depth 1 "$REPO" "$REL"
+      git -C "$REL" fetch --quiet --depth 1 origin "$SHA"
+      git -C "$REL" checkout --quiet FETCH_HEAD
+    }
+  fi
   (cd "$REL" && PATH="$OPT/node/bin:$PATH" npm ci --omit=dev)
   # Tests at the lowest priority, and without the CLI's pack test: the game always wins.
   (cd "$REL" && nice -n 19 env GRILL_ME_SKIP_PACK=1 "$NODE" --test)
   (cd "$REL" && "$NODE" packages/server/scripts/build-static.mjs "$REL/static")
+  echo "$SHA" > "$REL/.release-sha" # the service shows this as GRILL_ME_VERSION on /stats
   chown -R root:root "$REL"
 else
   echo "release $SHORT already built"
@@ -111,7 +123,9 @@ fi
 # ---------- 5. nginx (before the switch: a failed nginx -t leaves the box as it was) ----------
 step "nginx"
 mkdir -p /etc/nginx/snippets
-cp "$REL/deploy/nginx/grill-me-logformat.conf" "$LOGFMT"
+# The http-context file (log format + the markdown map) replaced grill-me-logformat.conf.
+rm -f /etc/nginx/conf.d/grill-me-logformat.conf
+cp "$REL/deploy/nginx/grill-me-http.conf" "$HTTPCONF"
 BAK="$SITE.bak-$(date +%Y%m%d%H%M%S)"
 cp "$SITE" "$BAK"
 [ ! -f "$SNIPPET" ] || cp "$SNIPPET" "$BAK.snippet"
@@ -179,6 +193,17 @@ done
 echo "API answers on 127.0.0.1:8787"
 
 # ---------- 8. checks ----------
+# The checks come from the release itself, so an older operator clone can't run older checks
+# against a newer release.
 step "checks"
-GRILL_ME_NODE="$NODE" CHECK_LIVE="$REL/packages/server/scripts/check-live.mjs" \
-  bash "$HERE/check.sh" "$BEFORE"
+if GRILL_ME_NODE="$NODE" CHECK_LIVE="$REL/packages/server/scripts/check-live.mjs" \
+  bash "$REL/deploy/check.sh" "$BEFORE"; then
+  # Record the release only once the checks pass, so RELEASE is always a working deploy.
+  echo "$SHA $REF $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OPT/RELEASE"
+  echo "DEPLOYED $SHA ($REF)"
+else
+  echo "checks failed; the last good release is:" >&2
+  cat "$OPT/RELEASE" 2>/dev/null >&2 || echo "(none recorded)" >&2
+  echo "run: bash deploy/rollback.sh" >&2
+  exit 1
+fi

@@ -26,7 +26,7 @@ if [ "${1:-}" = "--remove" ]; then
   # Restore the site file: the newest backup WITHOUT our include, or strip the include and put
   # the bare location / back (a backup made by a re-deploy already contains the include).
   bash "$HERE/lib/restore-site.sh" "$SITE"
-  rm -f "$SNIPPET" /etc/nginx/conf.d/grill-me-logformat.conf
+  rm -f "$SNIPPET" /etc/nginx/conf.d/grill-me-http.conf /etc/nginx/conf.d/grill-me-logformat.conf
   nginx -t
   systemctl reload nginx
   if [ -d "$WWW.placeholder" ]; then
@@ -60,4 +60,6 @@ sleep 2
 systemctl is-active --quiet grill-me || die "grill-me didn't come up after rollback"
 GRILL_ME_NODE="${GRILL_ME_NODE:-$OPT/node/bin/node}" CHECK_LIVE="$PREV/packages/server/scripts/check-live.mjs" \
   bash "$HERE/check.sh" "$OPT/before"
+# The checks passed: RELEASE now names the release we rolled back to.
+echo "$(cat "$PREV/.release-sha" 2>/dev/null || basename "$PREV") rollback $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OPT/RELEASE"
 echo "rolled back to $PREV"
