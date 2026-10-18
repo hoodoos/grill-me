@@ -307,7 +307,8 @@ test("persistence: a grill survives a restart of the same DB file", async () => 
 test("static: routes, content types, cache and security headers", async () => {
   const { base, close } = await start();
   const get = (p) => fetch(`${base}${p}`);
-  const html = await get("/");
+  // A browser-style Accept: a bare fetch negotiates to the markdown guide (phase 3).
+  const html = await fetch(`${base}/`, { headers: { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" } });
   assert.equal(html.status, 200);
   assert.match(html.headers.get("content-type"), /^text\/html/);
   assert.equal(html.headers.get("cache-control"), "public, max-age=300");

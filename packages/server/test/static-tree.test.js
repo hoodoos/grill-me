@@ -6,6 +6,7 @@ import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderHomepage } from "../src/install.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -33,6 +34,7 @@ test("the static tree nginx serves matches what the Node static routes serve", a
       for await (const file of walk(src)) {
         const rel = path.relative(src, file);
         if (/\.test\.js$/.test(rel) || /^readme/i.test(path.basename(rel))) continue;
+        if (rel === "index.html") continue; // phase 3: rendered from the template, compared below
         const built = await readFile(path.join(dst, rel)).catch(() => null);
         assert.ok(built, `missing from static tree: ${rel}`);
         assert.deepEqual(built, await readFile(file), `bytes differ: ${rel}`);
@@ -40,6 +42,13 @@ test("the static tree nginx serves matches what the Node static routes serve", a
       }
     }
     assert.ok(count > 10, "sanity: compared some files");
+    // phase 3: install.md, llms.txt and the rendered index.html are in the tree, the same bytes
+    // the Node server serves (same one render in src/install.js).
+    const installMd = await readFile(path.join(ROOT, "site/install.md"));
+    assert.deepEqual(await readFile(path.join(out, "install.md")), installMd);
+    assert.deepEqual(await readFile(path.join(out, "llms.txt")), await readFile(path.join(ROOT, "site/llms.txt")));
+    const template = await readFile(path.join(ROOT, "packages/server/public/index.html"), "utf8");
+    assert.equal(await readFile(path.join(out, "index.html"), "utf8"), renderHomepage(template, installMd.toString("utf8")));
   } finally {
     await rm(out, { recursive: true, force: true });
   }
