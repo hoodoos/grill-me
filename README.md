@@ -9,6 +9,10 @@ It's a free, open-source taster for Agent Hub: the same grill UI, without accoun
 
 ## Install
 
+**0.1.0 is not released; installation commands below require the public release.** See the
+repository [acceptance checklist and release hold](https://github.com/hoodoos/grill-me/blob/main/docs/ACCEPTANCE.md)
+(available on main after the reviewed documentation merge).
+
 Paste this to your agent: **Install Grill Me from https://grill-me.ai/install**
 
 Or run the commands for your client yourself.
