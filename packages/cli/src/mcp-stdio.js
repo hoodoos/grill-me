@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import { createMcpHandler, grillToolDefs, clientAgent } from "../../core/src/index.js";
 import { send, wait, cancel } from "./index.js";
+import { writeOutput } from "./output.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -34,6 +35,13 @@ const STATUS_TEXT = {
   OFFLINE: "Couldn't reach grill-me.ai for 5 minutes. The answers stay on the server for up to an hour; call grill_wait again to check.",
   WAITING: "No answers yet. Call grill_wait again with the same arguments to keep waiting.",
 };
+
+const waitResult = (result) => ({
+  text: result.status === "ANSWERS"
+    ? `${result.lines}\nSTATUS: ANSWERS`
+    : `${STATUS_TEXT[result.status]}\nSTATUS: ${result.status}`,
+  structured: { status: result.status, ...(result.lines ? { answers: result.lines } : {}) },
+});
 
 function localTools(env) {
   const waitCfg = waitConfig(env);
@@ -69,11 +77,8 @@ function localTools(env) {
         agent: clientAgent(ctx.clientInfo),
         signal: ctx.signal,
       });
-      const text =
-        result.status === "ANSWERS"
-          ? `${result.lines}\nSTATUS: ANSWERS`
-          : `${STATUS_TEXT[result.status]}\nSTATUS: ${result.status}`;
-      return { text, structured: { status: result.status, ...(result.lines ? { answers: result.lines } : {}) } };
+      if (result.status === "ANSWERS") ctx.onDelivery(result);
+      return waitResult(result);
     },
 
     grill_cancel: async (args, ctx) => {
@@ -90,7 +95,7 @@ export function startStdioServer({ stdin = process.stdin, stdout = process.stdou
   const handler = createMcpHandler({ name: "grill-me", version: pkg.version, instructions: INSTRUCTIONS, tools: localTools(env) });
   const conn = { clientInfo: undefined };
   const controllers = new Map(); // request id → AbortController
-  const write = (obj) => stdout.write(JSON.stringify(obj) + "\n");
+  const write = (obj, signal) => writeOutput(stdout, JSON.stringify(obj) + "\n", signal);
   const note = (s) => stderr.write(`grill-me mcp: ${s}\n`);
 
   stdin.setEncoding("utf8");
@@ -111,7 +116,7 @@ export function startStdioServer({ stdin = process.stdin, stdout = process.stdou
       msg = JSON.parse(line);
     } catch {
       note("ignoring a malformed line");
-      write({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
+      write({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }).catch(() => note("output failed"));
       return;
     }
     if (msg?.method === "initialize" && msg.params?.clientInfo) conn.clientInfo = msg.params.clientInfo;
@@ -120,19 +125,34 @@ export function startStdioServer({ stdin = process.stdin, stdout = process.stdou
       return;
     }
     const ctrl = new AbortController();
+    let delivery;
     if (msg && typeof msg === "object" && "id" in msg) controllers.set(msg.id, ctrl);
     handler
-      .handle(msg, { clientInfo: conn.clientInfo, signal: ctrl.signal })
-      .then((res) => {
-        if (res && !ctrl.signal.aborted) write(res); // a cancelled call's answer is moot
-      })
-      .catch((err) => {
-        note(`internal error: ${err?.message || err}`);
-        if (!ctrl.signal.aborted && msg && "id" in msg) {
-          write({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "internal error" } });
+      .handle(msg, { clientInfo: conn.clientInfo, signal: ctrl.signal, onDelivery: (result) => { delivery = result; } })
+      .then(async (res) => {
+        if (!res || ctrl.signal.aborted) return;
+        if (delivery && !delivery.canDeliver()) {
+          delivery.dispose();
+          delivery = null;
+          const waiting = waitResult({ status: "WAITING" });
+          res = { ...res, result: { content: [{ type: "text", text: waiting.text }], structuredContent: waiting.structured } };
+        }
+        try { await write(res, delivery?.deliverySignal ?? ctrl.signal); }
+        catch { note("output interrupted; pending retained"); return; }
+        // Reply first. The controller stays registered through cleanup, so cancelled/stdin-end
+        // notifications still abort DELETE without blocking ping or any other request.
+        if (delivery) {
+          try { await delivery.ack(); }
+          catch { note("answer cleanup interrupted; pending retained"); }
         }
       })
-      .finally(() => controllers.delete(msg?.id));
+      .catch(async () => {
+        note("internal error");
+        if (!ctrl.signal.aborted && msg && "id" in msg) {
+          await write({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "internal error" } }, ctrl.signal).catch(() => {});
+        }
+      })
+      .finally(() => { delivery?.dispose(); controllers.delete(msg?.id); });
   };
 
   return new Promise((resolve) => {

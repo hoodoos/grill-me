@@ -25,6 +25,7 @@ async function request(server, method, path, { token, body, waitSeconds = 0, ok 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
+  let text;
   try {
     res = await fetch(`${server}${path}`, {
       method,
@@ -36,12 +37,13 @@ async function request(server, method, path, { token, body, waitSeconds = 0, ok 
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
+    // Fetch resolves at headers. The same timeout/signal must cover a stalled body too.
+    text = await res.text();
   } catch (err) {
     throw new ApiError("network", `could not reach ${server}: ${err?.cause?.message || err.message}`);
   } finally {
     clearTimeout(timer);
   }
-  const text = await res.text();
   if (!res.ok && !ok.includes(res.status)) {
     throw new ApiError(codeFor(res.status), `${method} ${path} → ${res.status}: ${text.slice(0, 200)}`, {
       status: res.status,
@@ -81,6 +83,6 @@ export async function waitAnswers(server, id, seconds, { agent, signal } = {}) {
 }
 
 // DELETE /api/g/:id. 204 on success; 404 throws a "gone" ApiError (callers treat it as success).
-export async function deleteGrill(server, id, token, { agent } = {}) {
-  return request(server, "DELETE", `/api/g/${id}`, { token, agent });
+export async function deleteGrill(server, id, token, { agent, signal } = {}) {
+  return request(server, "DELETE", `/api/g/${id}`, { token, agent, signal });
 }

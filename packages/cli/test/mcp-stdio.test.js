@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { DEMO_TEXT } from "../../core/src/index.js";
 import { startFakeServer } from "./fake-server.js";
 import { phoneAnswer } from "./phone.js";
+import { readPending } from "../src/pending.js";
 
 const BIN = fileURLToPath(new URL("../bin/grill-me.js", import.meta.url));
 
@@ -31,7 +32,9 @@ class McpClient {
         const msg = JSON.parse(line); // every stdout line must be valid JSON(-RPC)
         assert.equal(msg.jsonrpc, "2.0", `stdout line is JSON-RPC: ${line}`);
         if ("id" in msg && this.pending.has(msg.id)) {
-          this.pending.get(msg.id)(msg);
+          const call = this.pending.get(msg.id);
+          clearTimeout(call.timer);
+          call.resolve(msg);
           this.pending.delete(msg.id);
         }
       }
@@ -43,10 +46,13 @@ class McpClient {
   }
   request(method, params) {
     const id = this.nextId++;
-    this.send({ jsonrpc: "2.0", id, method, params });
     return new Promise((resolve, reject) => {
-      this.pending.set(id, resolve);
-      setTimeout(() => reject(new Error(`${method}: no response within 30 s`)), 30_000);
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${method}: no response within 30 s`));
+      }, 30_000);
+      this.pending.set(id, { resolve, timer });
+      this.send({ jsonrpc: "2.0", id, method, params });
     });
   }
   notify(method, params) {
@@ -64,6 +70,7 @@ async function fixture(t, { clientName = "Claude Code", env = {} } = {}) {
   const mcp = new McpClient(child);
   t.after(async () => {
     child.kill();
+    for (const call of mcp.pending.values()) clearTimeout(call.timer);
     await fake.close();
     await fs.rm(home, { recursive: true, force: true });
   });
@@ -78,6 +85,13 @@ async function fixture(t, { clientName = "Claude Code", env = {} } = {}) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const until = async (condition, timeout = 2000) => {
+  const end = Date.now() + timeout;
+  while (!(await condition())) {
+    assert.ok(Date.now() < end, "post-delivery cleanup finished promptly");
+    await sleep(10);
+  }
+};
 
 test("initialize → tools/list → grill_send → phone answers → grill_wait → ANSWERS", async (t) => {
   const { home, fake, mcp } = await fixture(t);
@@ -112,7 +126,8 @@ test("initialize → tools/list → grill_send → phone answers → grill_wait 
   assert.equal(waited.result.structuredContent.status, "ANSWERS");
   assert.match(waited.result.structuredContent.answers, /Q2 - Always dark/);
   assert.ok(waited.result.content[0].text.endsWith("STATUS: ANSWERS"));
-  assert.equal(fake.grill(id), undefined, "the grill was deleted after ANSWERS");
+  await until(() => !fake.grill(id));
+  assert.equal(fake.grill(id), undefined, "post-delivery cleanup deletes the grill");
 });
 
 test("grill_wait with seconds: 1 returns WAITING", async (t) => {
@@ -220,3 +235,77 @@ test("an env value above 900 clamps to the local cap", async (t) => {
   const wait = list.result.tools.find((x) => x.name === "grill_wait");
   assert.match(wait.inputSchema.properties.seconds.description, /\(default 900, max 900\)/);
 });
+
+for (const fault of ["503", "stalled headers", "stalled body"]) {
+  test(`real stdio grill_wait deadline covers ${fault} and preserves pending`, { timeout: 12_000 }, async (t) => {
+    const { home, fake, mcp } = await fixture(t, { env: { GRILL_ME_WAIT_SECONDS: "4" } });
+    const sent = await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
+    const { id } = sent.result.structuredContent;
+    fake.intercept((req, res) => {
+      if (!req.url.includes("/answers")) return false;
+      if (fault === "503") res.writeHead(503).end();
+      else if (fault === "stalled body") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.flushHeaders();
+        res.write('{"ct":');
+      }
+      return true;
+    });
+    const started = performance.now();
+    const waited = await mcp.request("tools/call", { name: "grill_wait", arguments: { id, seconds: 4 } });
+    const elapsed = performance.now() - started;
+    assert.equal(waited.result.structuredContent.status, "WAITING");
+    assert.ok(elapsed >= 3800 && elapsed < 5200, `${fault} took ${elapsed} ms for a 4000 ms budget`);
+    assert.ok(await readPending(home, id), "pending remains recoverable");
+    assert.ok(fake.grill(id), "server grill is untouched");
+    fake.intercept(() => false);
+    const pending = await readPending(home, id);
+    await phoneAnswer(fake.url, id, pending.secret, [{ n: 1, kind: "agree" }]);
+    const recovered = await mcp.request("tools/call", { name: "grill_wait", arguments: { id, seconds: 4 } });
+    assert.equal(recovered.result.structuredContent.status, "ANSWERS");
+  });
+}
+
+for (const fault of ["stalled DELETE headers", "committed lost reply", "committed stalled body", "cancel after committed DELETE"]) {
+  test(`real stdio delivers before ${fault}, keeps ping responsive and recovers ciphertext`, { timeout: 12_000 }, async (t) => {
+    const { home, fake, mcp } = await fixture(t, { env: { GRILL_ME_WAIT_SECONDS: "2" } });
+    const sent = await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
+    const { id } = sent.result.structuredContent;
+    const pending = await readPending(home, id);
+    await phoneAnswer(fake.url, id, pending.secret, [{ n: 1, kind: "own", text: "Recover after lost DELETE" }]);
+    if (fault === "stalled DELETE headers") fake.intercept((req) => req.method === "DELETE");
+    else fake.afterDelete((_req, res) => {
+      if (fault === "committed stalled body") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.flushHeaders();
+        res.write('{"unfinished":');
+      }
+      return true;
+    });
+    const waitId = mcp.nextId;
+    const started = performance.now();
+    const waited = await mcp.request("tools/call", { name: "grill_wait", arguments: { id, seconds: 2 } });
+    assert.equal(waited.result.structuredContent.status, "ANSWERS");
+    assert.ok(performance.now() - started < 1000, "MCP answer response does not wait for DELETE");
+    await until(() => fake.requests().some((r) => r.method === "DELETE"));
+    const pingStarted = performance.now();
+    assert.deepEqual((await mcp.request("ping")).result, {});
+    assert.ok(performance.now() - pingStarted < 750, "cleanup cannot block ping");
+    if (fault === "cancel after committed DELETE") {
+      mcp.notify("notifications/cancelled", { requestId: waitId });
+      await until(() => mcp.stderr.includes("answer cleanup interrupted"));
+      assert.ok(performance.now() - started < 1000, "the original controller survives reply and cancels cleanup promptly");
+    } else await until(() => mcp.stderr.includes("answer cleanup interrupted"), 3000);
+    const cached = await readPending(home, id);
+    assert.ok(cached.answerBlob.ct);
+    assert.ok(!JSON.stringify(cached).includes("Recover after lost DELETE"));
+    if (fault !== "stalled DELETE headers") assert.equal(fake.grill(id), undefined, "server already committed DELETE");
+    fake.intercept(() => false);
+    fake.afterDelete(() => false);
+    const before = fake.requests().length;
+    const recovered = await mcp.request("tools/call", { name: "grill_wait", arguments: { id, seconds: 2 } });
+    assert.match(recovered.result.structuredContent.answers, /Recover after lost DELETE/);
+    await until(async () => (await readPending(home, id)) === null);
+    assert.ok(fake.requests().slice(before).every((r) => r.method === "DELETE"), "replay needs no GET, and confirmed 404 can clear pending");
+  });
+}

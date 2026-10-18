@@ -2,19 +2,41 @@
 // Written atomically (temp file + rename) with mode 0600; files older than 3 days are pruned.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const PRUNE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 const pendingDir = (home) => path.join(home, "pending");
 const pendingPath = (home, id) => path.join(pendingDir(home), `${id}.json`);
+const writes = new Map();
 
 export async function savePending(home, record) {
+  const file = pendingPath(home, record.id);
+  // Windows can reject replacing a destination while another rename/chmod still has it open.
+  // Serialize this process's writes per record; unique temps also isolate separate processes.
+  const writing = (writes.get(file) ?? Promise.resolve()).catch(() => {}).then(() => writePending(home, record));
+  writes.set(file, writing);
+  try { return await writing; }
+  finally { if (writes.get(file) === writing) writes.delete(file); }
+}
+
+async function writePending(home, record) {
   const dir = pendingDir(home);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const file = pendingPath(home, record.id);
-  const tmp = path.join(dir, `.${record.id}.${process.pid}.tmp`);
-  await fs.writeFile(tmp, JSON.stringify(record, null, 2) + "\n", { mode: 0o600 });
-  await fs.rename(tmp, file);
+  const tmp = path.join(dir, `.${record.id}.${process.pid}.${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await fs.open(tmp, "wx", 0o600);
+    await handle.writeFile(JSON.stringify(record, null, 2) + "\n");
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await fs.rename(tmp, file);
+  } finally {
+    try { await handle?.close(); }
+    finally { await fs.rm(tmp, { force: true }); } // only this write's unique temporary file
+  }
   try {
     await fs.chmod(file, 0o600); // rename may keep a pre-existing file's mode
   } catch {

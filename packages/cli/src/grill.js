@@ -14,7 +14,7 @@ import { createGrill, waitAnswers, deleteGrill } from "./api.js";
 import { savePending, readPending, removePending, prunePending } from "./pending.js";
 import { qrText } from "./qr.js";
 
-const NOW = () => Date.now();
+const NOW = () => performance.now(); // monotonic wall-clock budget, unaffected by clock corrections
 const SLEEP = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const defaultBackoff = (failures, { baseMs = 1000, capMs = 30000 } = {}) =>
@@ -81,29 +81,83 @@ async function uploadGrill(grill, { server, home, qrMode, agent }) {
   return { id, link, qr, count: grill.questions.length, expiresAt };
 }
 
-// Answers arrived: decrypt, print lines, DELETE (retry twice on network errors),
-// and remove the pending file whatever happened.
-async function collect(pending, blob, { server, home, sleep = SLEEP, agent }) {
+// One absolute budget spans polling, retries, delivery and acknowledgement. An unanswered
+// CLI wait has no overall deadline; individual HTTP attempts still have their own timeout.
+function waitScope(seconds, signal, now) {
+  const until = Number.isFinite(seconds) ? now() + Math.max(0, seconds * 1000) : Infinity;
+  const deadline = new AbortController();
+  let closed = false;
+  const remaining = () => Math.max(0, until - now());
+  const timer = Number.isFinite(until) ? setTimeout(() => deadline.abort(), remaining()) : null;
+  timer?.unref();
+  const scope = {
+    signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
+    remaining,
+    ready() {
+      if (signal?.aborted) throw abortedError();
+      return !closed && !deadline.signal.aborted && remaining() > 0;
+    },
+    assertReady() {
+      if (!scope.ready()) {
+        const err = new Error("the wait deadline elapsed");
+        err.code = "deadline";
+        throw err;
+      }
+    },
+    close() { closed = true; clearTimeout(timer); deadline.abort(); },
+  };
+  return scope;
+}
+
+// Persist only the encrypted answer blob before handing any answers to a caller. The explicit
+// ack phase must run only after successful delivery. A failed/ambiguous DELETE keeps the cache,
+// including when the server committed DELETE but its reply was lost.
+async function collect(pending, blob, { server, home, agent, scope }) {
   const answers = await openAnswers(blob, pending.grill, { id: pending.id, secret: pending.secret });
   const lines = answerLines(pending.grill, answers);
-  const { writeToken } = await deriveKeys(pending.secret);
-  try {
-    let lastErr;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await deleteGrill(server, pending.id, writeToken, { agent });
-        lastErr = null;
-        break;
-      } catch (err) {
-        lastErr = err;
-        if (err.code !== "network") break; // gone/server/bad: the grill is already as good as deleted
-        if (attempt < 2) await sleep(1000 * (attempt + 1));
-      }
-    }
-    return { status: "ANSWERS", lines, answers, deleteError: lastErr?.code === "network" ? lastErr.message : null };
-  } finally {
-    await removePending(home, pending.id).catch(() => {});
+  if (!pending.answerBlob) {
+    await savePending(home, { ...pending, answerBlob: { ct: blob.ct, iv: blob.iv } });
   }
+  if (!scope.ready()) return { status: "WAITING" };
+  let acknowledged = false;
+  return {
+    status: "ANSWERS", lines, answers,
+    canDeliver: () => scope.ready(),
+    deliverySignal: scope.signal,
+    dispose: () => scope.close(),
+    async ack() {
+      try {
+        if (acknowledged) return;
+        scope.assertReady();
+        const { writeToken } = await deriveKeys(pending.secret);
+        for (let attempt = 0; ; attempt++) {
+          scope.assertReady();
+          try {
+            const res = await deleteGrill(server, pending.id, writeToken, { agent, signal: scope.signal });
+            if (res.status !== 204) throw new Error("DELETE did not confirm cleanup");
+            break;
+          } catch (err) {
+            scope.assertReady();
+            if (err.code === "gone") break; // confirmed 404 is also an acknowledgement
+            if (err.code !== "network" || attempt >= 2) throw err;
+            const delay = Math.min(1000 * (attempt + 1), scope.remaining());
+            await abortableSleep(delay, scope.signal);
+          }
+        }
+        scope.assertReady();
+        await removePending(home, pending.id);
+        // unlink itself cannot accept an AbortSignal. If cancellation/deadline raced it,
+        // restore the encrypted recovery record rather than dropping the final local copy.
+        if (scope.signal.aborted || scope.remaining() <= 0) {
+          await savePending(home, { ...pending, answerBlob: { ct: blob.ct, iv: blob.iv } });
+          scope.assertReady();
+        }
+        acknowledged = true;
+      } finally {
+        scope.close();
+      }
+    },
+  };
 }
 
 export async function send(input, { title, server, qr = "dark", home, agent } = {}) {
@@ -119,60 +173,61 @@ export async function send(input, { title, server, qr = "dark", home, agent } = 
   return uploadGrill(res.grill, { server: resolveServer(server), home: dir, qrMode: qr, agent: resolveAgent(agent) });
 }
 
-export async function wait(id, { seconds = Infinity, onRetry, server, home, agent, signal, now = NOW, sleep = SLEEP, pollSeconds = 50, offlineMs = 5 * 60 * 1000, backoffMs = defaultBackoff } = {}) {
-  const dir = stateHome(home);
-  await prunePending(dir, { now: now() });
-  const pending = await loadPending(dir, id);
-  const srv = resolveServer(server || pending.server);
-  const ag = resolveAgent(agent);
-  const start = now();
-  let lastOk = start;
-  let failures = 0;
-  for (;;) {
-    if (signal?.aborted) throw abortedError();
-    const elapsedMs = now() - start;
-    if (elapsedMs >= seconds * 1000) return { status: "WAITING" };
-    // cap each poll at the remaining time, so a bounded wait never overshoots `seconds`
-    const waitParam = Math.max(0, Math.min(pollSeconds, Math.ceil(seconds - elapsedMs / 1000)));
-    let res;
-    try {
-      res = await waitAnswers(srv, id, waitParam, { agent: ag, signal });
-    } catch (err) {
-      if (signal?.aborted) throw abortedError();
-      if (err.code === "gone") return { status: "EXPIRED" };
-      if (err.code !== "network" && err.code !== "server" && err.code !== "limited") throw err;
-      failures++;
-      if (now() - lastOk >= offlineMs) return { status: "OFFLINE" };
-      const delayMs = backoffMs(failures);
-      onRetry?.({ error: err, delayMs, attempt: failures });
-      await (signal ? abortableSleep(delayMs, signal) : sleep(delayMs));
-      continue;
+export async function wait(id, { seconds = Infinity, onRetry, server, home, agent, signal, now = NOW, sleep = SLEEP, pollSeconds = 50, offlineMs = 5 * 60 * 1000, backoffMs = defaultBackoff, once = false } = {}) {
+  const scope = waitScope(seconds, signal, now);
+  let handedOff = false;
+  try {
+    const dir = stateHome(home);
+    await prunePending(dir);
+    const pending = await loadPending(dir, id);
+    const srv = resolveServer(server || pending.server);
+    const ag = resolveAgent(agent);
+    const finish = async (blob) => {
+      const result = await collect(pending, blob, { server: srv, home: dir, agent: ag, scope });
+      handedOff = result.status === "ANSWERS";
+      return result;
+    };
+    if (!scope.ready()) return { status: "WAITING" };
+    // Recovery must precede any server request: the server may already have deleted the grill.
+    if (pending.answerBlob) return await finish(pending.answerBlob);
+    let lastOk = now();
+    let failures = 0;
+    for (;;) {
+      if (!scope.ready()) return { status: "WAITING" };
+      const waitParam = once ? 0 : Math.max(0, Math.min(pollSeconds, Math.ceil(scope.remaining() / 1000)));
+      let res;
+      try {
+        res = await waitAnswers(srv, id, waitParam, { agent: ag, signal: scope.signal });
+      } catch (err) {
+        if (!scope.ready()) return { status: "WAITING" };
+        if (err.code === "gone") return { status: "EXPIRED" };
+        if (once || !["network", "server", "limited"].includes(err.code)) throw err;
+        failures++;
+        if (now() - lastOk >= offlineMs) return { status: "OFFLINE" };
+        const delayMs = Math.min(backoffMs(failures), scope.remaining());
+        onRetry?.({ error: err, delayMs, attempt: failures });
+        await (Number.isFinite(scope.remaining()) || signal
+          ? abortableSleep(delayMs, scope.signal) : sleep(delayMs));
+        continue;
+      }
+      lastOk = now();
+      failures = 0;
+      if (res.status !== 204) return await finish(res.json);
+      if (once) return { status: "WAITING" };
     }
-    lastOk = now();
-    failures = 0;
-    if (res.status === 204) continue;
-    return collect(pending, res.json, { server: srv, home: dir, sleep, agent: ag });
+  } catch (err) {
+    if (signal?.aborted) throw abortedError();
+    if (!scope.ready()) return { status: "WAITING" };
+    throw err;
+  } finally {
+    if (!handedOff) scope.close();
   }
 }
 
-// One wait=0 request ("check grill"); nothing yet → WAITING.
-// Named check, not fetch, so consumers don't shadow the global fetch.
-export async function check(id, { server, home, agent, signal, sleep = SLEEP } = {}) {
-  const dir = stateHome(home);
-  await prunePending(dir);
-  const pending = await loadPending(dir, id);
-  const srv = resolveServer(server || pending.server);
-  const ag = resolveAgent(agent);
-  let res;
-  try {
-    res = await waitAnswers(srv, id, 0, { agent: ag, signal });
-  } catch (err) {
-    if (signal?.aborted) throw abortedError();
-    if (err.code === "gone") return { status: "EXPIRED" };
-    throw err;
-  }
-  if (res.status === 204) return { status: "WAITING" };
-  return collect(pending, res.json, { server: srv, home: dir, sleep, agent: ag });
+// One wait=0 request ("check grill"); cached answers are replayed before going to the server.
+// Library callers explicitly ack only after successfully delivering the returned answer lines.
+export function check(id, options = {}) {
+  return wait(id, { ...options, once: true });
 }
 
 // Re-upload the same grill under a new id and a new secret. The phone resumes its progress,

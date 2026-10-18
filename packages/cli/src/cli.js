@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { send, wait, check, resend, cancel } from "./index.js";
 import { isId } from "../../core/src/index.js";
+import { writeOutput } from "./output.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -118,12 +119,21 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
       case "fetch": {
         const { values, positionals } = parse(rest, { ...serverOpt }, { takesId: true });
         const [id] = positionals;
-        const result = await (cmd === "wait" ? wait(id, { server: values.server }) : check(id, { server: values.server }));
+        let result = await (cmd === "wait" ? wait(id, { server: values.server }) : check(id, { server: values.server }));
+        if (result.status === "ANSWERS") {
+          try {
+            if (result.canDeliver()) {
+              await writeOutput(stdout, `${result.lines}\nSTATUS: ANSWERS\n`, result.deliverySignal);
+              try { await result.ack(); }
+              catch { err("grill-me: answers delivered; cleanup failed, encrypted answers kept for retry."); }
+              return 0;
+            }
+          } finally {
+            result.dispose();
+          }
+          result = { status: "WAITING" };
+        }
         switch (result.status) {
-          case "ANSWERS":
-            if (result.deleteError) err(`grill-me: answers received, but deleting the grill failed: ${result.deleteError}`);
-            out(result.lines);
-            break;
           case "EXPIRED":
             out(`The grill expired before it was answered. Send it again with: npx -y grill-me-ai resend ${id}`);
             break;

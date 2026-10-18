@@ -214,6 +214,7 @@ and versions, plus live health: open waiting requests, requests and errors per m
 
 A brief network error is retried quietly. A dropped wait never loses answers, because they stay on the server
 until the agent deletes them or the grill expires.
+Locally, encrypted answers are cached atomically in the pending record before delivery and replayed until output succeeds and DELETE is confirmed, so cancellation or a lost DELETE reply cannot lose answers.
 
 The terminal QR uses Unicode half blocks, ECC level M, and a 2-module quiet zone. By default it is drawn for a
 dark terminal: the light modules are the blocks. That default was tested by scanning a Claude Code reply with a
