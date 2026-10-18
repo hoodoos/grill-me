@@ -253,7 +253,9 @@ server also serves a remote MCP endpoint at `https://grill-me.ai/mcp`, with the 
 - **Transport:** streamable HTTP, stateless. `POST /mcp` takes JSON-RPC. `Mcp-Session-Id` is neither required
   nor issued. `GET /mcp` returns `405`. A `tools/call` that waits answers with an SSE stream opened at once,
   with keep-alive comments, so proxies and clients don't cut an idle response.
-  - An `Origin` header, if present, must be on a short allowlist; otherwise the server answers `403`.
+  - An `Origin` header, if present, must be on a short allowlist (`https://claude.ai`, `https://chatgpt.com`,
+    `https://grill-me.ai`); otherwise the server answers `403`. `/stats` counts rejected origins per day (scheme
+    and host only, at most 20 distinct a day), so a real client that gets blocked is noticed.
 - **No auth (authless).** Both claude.ai and ChatGPT allow that for custom connectors.
 - **Key with the model:**
   - `grill_send`: the server makes the id and secret, encrypts in memory, and stores only the ciphertext and
@@ -270,8 +272,11 @@ server also serves a remote MCP endpoint at `https://grill-me.ai/mcp`, with the 
 - **No logging of tool arguments or results anywhere**, error paths included. Errors returned to the model never
   echo its input.
 - **Limits:** calls arrive from the platforms' shared IPs, so per-IP limits don't fit here. Hosted mode has its
-  own global caps on grills per hour and on concurrent waits, with grills and their retention exactly as in local
-  mode.
+  own global caps: 600 grills an hour and 200 concurrent waits. Where the client sends a conversation id (ChatGPT's
+  `_meta["openai/session"]`), there is also a cap of 30 grills an hour per conversation, kept in memory only, so
+  one noisy conversation can't use up everyone's quota. Clients without one fall under the global caps only.
+  `/stats` shows the global headroom and how often each cap is hit. Grills and their retention work exactly as in
+  local mode.
 - **Site wording:** "Local mode: we can't read your grills. App mode: your grill passes through our server only to
   be encrypted, and is never stored readable."
 - **Where it works** (October 2026):
@@ -279,6 +284,8 @@ server also serves a remote MCP endpoint at `https://grill-me.ai/mcp`, with the 
     apps.
   - ChatGPT: custom MCP servers are web only, and only Business, Enterprise and Edu allow write tools like
     `grill_send`.
+  - The README and the site lead with claude.ai, the Claude apps, Claude Code and Codex. ChatGPT is listed as
+    "ChatGPT Business, Enterprise and Edu, on the web". It never claims ChatGPT mobile, Plus or Free.
 - **Later, not now:** in-chat swipe cards through the MCP Apps extension, with a `ui://` resource referenced from
   the tool's `_meta`. Tool results already carry `structuredContent`, so that can be added without changing the
   tools.
