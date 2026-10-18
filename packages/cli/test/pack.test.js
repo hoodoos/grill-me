@@ -23,7 +23,8 @@ test("the packed tarball installs and works", { skip: !!process.env.GRILL_ME_SKI
   const tarball = sh(process.execPath, [PACK]);
   t.after(() => fs.rmSync(path.join(cliDir, "dist"), { recursive: true, force: true }));
 
-  const listing = sh("tar", ["--force-local", "-tzf", tarball]);
+  // --force-local is GNU tar only and only matters on Windows (paths like C:\... look like remote files)
+  const listing = sh("tar", [...(process.platform === "win32" ? ["--force-local"] : []), "-tzf", tarball]);
   assert.ok(listing.includes("package/packages/cli/bin/grill-me.js"), "bin ships");
   assert.ok(listing.includes("package/packages/core/src/index.js"), "core ships");
   assert.ok(!/(^|\n)package\/.*(test|scripts)\//.test(listing), "no test or script files ship");
