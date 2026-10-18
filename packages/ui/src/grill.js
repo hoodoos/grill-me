@@ -244,7 +244,7 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
         sending = true;
         render();
         try { await onSend(mach.toAnswers()); }
-        catch { setNote("Send failed. Your answers are still here — try again, or use Copy answers."); }
+        catch (e) { setNote(e?.userMessage || "Send failed. Your answers are still here — try again, or use Copy answers."); }
         finally { sending = false; render(); }
       });
       bar.append(undo, send);
@@ -310,6 +310,7 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
   render(true);
   return {
     destroy() { root.classList.remove("gm-root"); root.textContent = ""; },
+    answers: () => mach.toAnswers(), // what Copy answers uses while the cards are up
     setNote(text) {
       noteText = text || "";
       if (S.view === "summary" || S.view === "list") render();

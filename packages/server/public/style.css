@@ -20,15 +20,13 @@ button:hover { border-color: var(--accent); }
 code, pre { font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; }
 pre { background: var(--code); padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .meta { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
-[hidden] { display: none; }
+[hidden] { display: none !important; }
 
-/* The grill is a single column; on wide screens an extra panel (the reserved QR slot) can sit
-   beside it without any restructuring. */
-#layout { display: flex; justify-content: center; gap: 24px; align-items: stretch; }
+/* The grill is a single column. */
+#layout { display: flex; justify-content: center; }
 #screen-grill { flex: 1; min-width: 0; max-width: 640px; display: flex; flex-direction: column; min-height: 100dvh; }
 #grill-root { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #grill-footer { display: flex; justify-content: center; padding: 0 16px calc(14px + env(safe-area-inset-bottom)); }
-#side-panel { width: 300px; padding: 24px 16px; }
 
 .page { max-width: 560px; margin: 0 auto; padding: 48px 16px; }
 .page h1 { font-size: 22px; }

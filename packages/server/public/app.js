@@ -2,8 +2,7 @@
 // through /core; the swipe UI is /ui/grill.js and is handed only plain objects.
 //
 // Screens live in grill.html: #screen-message (plain message), #screen-grill (the cards),
-// #screen-done (after sending). A later desktop "scan this with your phone" QR view slots into
-// #side-panel via renderSidePanel() below — a separate step that touches nothing here.
+// #screen-done (after sending).
 import {
   openGrill, sealAnswers, deriveKeys, contentHash, answerLines,
   convert, DEMO_TEXT, isId, isSecret,
@@ -51,15 +50,15 @@ const show = (id) => {
 };
 const message = (text) => { $("message-text").textContent = text; show("screen-message"); };
 
-// Reserved hook: the desktop QR panel ("scan this with your phone") renders into #side-panel
-// when that view is added. Today there is nothing to render.
-function renderSidePanel() {}
-
 let currentGrill = null;
 let currentAnswers = null;
+let grillUi = null; // the mounted cards UI, while the grill screen is up
 
 async function copyAnswers() {
-  const text = answerLines(currentGrill, currentAnswers);
+  // On the grill screen, copy what's currently answered (works offline/expired); on the done
+  // screen, copy what was sent.
+  const answers = !$("screen-grill").hidden && grillUi ? grillUi.answers() : currentAnswers;
+  const text = answerLines(currentGrill, answers);
   try { await navigator.clipboard.writeText(text); return; } catch {}
   // Fallback: select a read-only textarea.
   const ta = document.createElement("textarea");
@@ -77,7 +76,8 @@ $("done-copy").addEventListener("click", copyAnswers);
 
 // After sending: poll until the agent has picked the grill up (it DELETEs it), 5 s for 15 min,
 // only while the page is visible.
-function doneScreen({ pickedUp = false, demo = false }) {
+function doneScreen({ id = null, demo = false }) {
+  grillUi = null;
   show("screen-done");
   if (demo) {
     $("done-title").textContent = "Demo: nothing was sent";
@@ -86,9 +86,8 @@ function doneScreen({ pickedUp = false, demo = false }) {
     $("done-lines").textContent = answerLines(currentGrill, currentAnswers);
     return;
   }
-  const id = currentGrill.id;
   $("done-title").textContent = "Sent ✓";
-  $("done-text").textContent = pickedUp ? "Picked up by your agent." : "Your agent has your answers.";
+  $("done-text").textContent = "Your agent has your answers.";
   const t0 = Date.now();
   const poll = setInterval(async () => {
     if (Date.now() - t0 > 15 * 60 * 1000) return clearInterval(poll);
@@ -211,7 +210,6 @@ async function runGrill(id) {
 }
 
 dropOld();
-renderSidePanel();
 if (DEMO) runDemo();
 else {
   const id = location.pathname.startsWith("/g/") ? location.pathname.slice(3) : "";

@@ -29,7 +29,7 @@
 .gm-root .gm-meta { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
 .gm-root .gm-spacer { flex: 1; }
 .gm-root .gm-row { display: flex; gap: 8px; align-items: center; }
-.gm-root [hidden] { display: none; }
+.gm-root [hidden] { display: none !important; }
 
 .gm-root .gm-md { overflow-wrap: anywhere; white-space: pre-wrap; }
 .gm-root summary.gm-meta { cursor: pointer; }
