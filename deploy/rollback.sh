@@ -23,13 +23,9 @@ if [ "${1:-}" = "--remove" ]; then
   systemctl disable grill-me 2>/dev/null || true
   rm -f "$UNIT"
   systemctl daemon-reload
-  # Restore the newest site-file backup (that's the file without our include line).
-  newest=$(ls -1t "$SITE".bak-* 2>/dev/null | head -1 || true)
-  if [ -n "$newest" ]; then
-    cp "$newest" "$SITE"
-  else
-    sed -i '/grill-me\.ai-locations\.conf/d' "$SITE"
-  fi
+  # Restore the site file: the newest backup WITHOUT our include, or strip the include and put
+  # the bare location / back (a backup made by a re-deploy already contains the include).
+  bash "$HERE/lib/restore-site.sh" "$SITE"
   rm -f "$SNIPPET" /etc/nginx/conf.d/grill-me-logformat.conf
   nginx -t
   systemctl reload nginx
@@ -56,7 +52,9 @@ PREV=$(cat "$OPT/previous")
 readlink "$OPT/current" > "$OPT/previous.tmp" && mv "$OPT/previous.tmp" "$OPT/previous.now"
 ln -sfn "$PREV" "$OPT/current"
 mv "$OPT/previous.now" "$OPT/previous"
-rsync -a --delete "$PREV/static/" "$WWW/"
+# Keep the .grill-me marker: without the exclude, --delete removes it and the next deploy
+# mistakes this for a first install and moves the live folder into the placeholder.
+rsync -a --delete --exclude=.grill-me "$PREV/static/" "$WWW/"
 systemctl restart grill-me
 sleep 2
 systemctl is-active --quiet grill-me || die "grill-me didn't come up after rollback"

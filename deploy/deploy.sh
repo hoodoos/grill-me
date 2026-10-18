@@ -7,8 +7,9 @@
 #   2. Node 24 under /opt/grill-me/node (the system Node is never touched)
 #   3. The grill-me system user
 #   4. Clone the ref into /opt/grill-me/releases/<short-sha>, npm ci, run the tests, build static
-#   5. Point /opt/grill-me/current at it; sync the static tree into /var/www/grill-me.ai
-#   6. nginx: log format + locations snippet + one include line in the 443 block, then reload
+#   5. nginx: log format + locations snippet + one include line in the 443 block, then reload —
+#      before anything is switched, so a failed `nginx -t` leaves the box exactly as it was
+#   6. Point /opt/grill-me/current at the release; sync the static tree into /var/www/grill-me.ai
 #   7. systemd unit; wait for the API to answer
 #   8. deploy/check.sh (site, long poll through nginx, neighbours unchanged)
 set -euo pipefail
@@ -35,6 +36,8 @@ step "preflight"
 . /etc/os-release
 [ "${ID:-}" = "ubuntu" ] || die "not Ubuntu ($ID)"
 case "$(uname -m)" in x86_64) ARCH=x64 ;; aarch64) ARCH=arm64 ;; *) die "unsupported arch $(uname -m)" ;; esac
+command -v rsync >/dev/null || die "rsync is required"
+command -v git >/dev/null || die "git is required"
 nginx -t
 if ss -ltn | grep -q '127\.0\.0\.1:8787 '; then
   systemctl is-active --quiet grill-me || die "port 8787 is held by something that isn't grill-me"
@@ -97,25 +100,15 @@ if [ ! -d "$REL" ]; then
     git -C "$REL" checkout --quiet FETCH_HEAD
   }
   (cd "$REL" && PATH="$OPT/node/bin:$PATH" npm ci --omit=dev)
-  (cd "$REL" && "$NODE" --test)
+  # Tests at the lowest priority, and without the CLI's pack test: the game always wins.
+  (cd "$REL" && nice -n 19 env GRILL_ME_SKIP_PACK=1 "$NODE" --test)
   (cd "$REL" && "$NODE" packages/server/scripts/build-static.mjs "$REL/static")
   chown -R root:root "$REL"
 else
   echo "release $SHORT already built"
 fi
 
-# ---------- 5. switch ----------
-step "switch to $SHORT"
-if [ -L "$OPT/current" ]; then readlink "$OPT/current" > "$OPT/previous"; fi
-ln -sfn "$REL" "$OPT/current"
-if [ ! -e "$WWW/.grill-me" ]; then
-  [ -d "$WWW" ] && mv "$WWW" "$WWW.placeholder"
-  mkdir -p "$WWW"
-fi
-cp -a "$REL/static/." "$WWW/"
-touch "$WWW/.grill-me"
-
-# ---------- 6. nginx ----------
+# ---------- 5. nginx (before the switch: a failed nginx -t leaves the box as it was) ----------
 step "nginx"
 mkdir -p /etc/nginx/snippets
 cp "$REL/deploy/nginx/grill-me-logformat.conf" "$LOGFMT"
@@ -123,30 +116,16 @@ BAK="$SITE.bak-$(date +%Y%m%d%H%M%S)"
 cp "$SITE" "$BAK"
 [ ! -f "$SNIPPET" ] || cp "$SNIPPET" "$BAK.snippet"
 cp "$REL/deploy/nginx/grill-me.ai-locations.conf" "$SNIPPET"
-if ! grep -q 'grill-me.ai-locations.conf' "$SITE"; then
-  # Add the include to the 443 block by pattern (the live file may differ from any patch):
-  # buffer each server block; the one with "listen 443 ssl" and "server_name grill-me.ai"
-  # loses its bare "location / { ... }" block and gains the include line.
-  awk '
-    /^server[ \t]*[{]/ { depth=1; buf=$0 ORS; is443=0; next }
-    depth {
-      if (/listen[ \t]+443[ \t]+ssl/) is443=1
-      buf=buf $0 ORS
-      if (/^[ \t]*[}]/) {
-        depth=0
-        if (is443 && buf ~ /server_name[ \t]+[^;]*grill-me\.ai/) {
-          gsub(/[ \t]*location[ \t]+\/[ \t]+[{][^}]*[}]\n/, "", buf)
-          sub(/\n[ \t]*[}]\n$/, "\n    include /etc/nginx/snippets/grill-me.ai-locations.conf;\n}\n", buf)
-        }
-        printf "%s", buf
-        next
-      }
-      next
-    }
-    { print }
-  ' "$SITE" > "$SITE.new"
-  diff -u "$SITE" "$SITE.new" || true
-  mv "$SITE.new" "$SITE"
+if ! grep -q 'grill-me\.ai-locations\.conf' "$SITE"; then
+  # Add the include to the 443 block by pattern (the live file may differ from any patch).
+  bash "$REL/deploy/lib/patch-site.sh" "$SITE"
+  diff -u "$BAK" "$SITE" || true
+  if [ "$(grep -c 'grill-me\.ai-locations\.conf' "$SITE")" != "1" ]; then
+    echo "the include wasn't added exactly once; restoring $BAK" >&2
+    cp "$BAK" "$SITE"
+    if [ -f "$BAK.snippet" ]; then cp "$BAK.snippet" "$SNIPPET"; else rm -f "$SNIPPET"; fi
+    exit 1
+  fi
 fi
 if ! nginx -t; then
   echo "nginx -t failed; restoring the site file and the previous snippet" >&2
@@ -155,6 +134,19 @@ if ! nginx -t; then
   exit 1
 fi
 systemctl reload nginx
+
+# ---------- 6. switch ----------
+step "switch to $SHORT"
+if [ -L "$OPT/current" ]; then readlink "$OPT/current" > "$OPT/previous"; fi
+ln -sfn "$REL" "$OPT/current"
+if [ ! -e "$WWW/.grill-me" ]; then
+  [ -d "$WWW" ] && mv "$WWW" "$WWW.placeholder"
+  mkdir -p "$WWW"
+  cp -a "$REL/static/." "$WWW/"
+  touch "$WWW/.grill-me"
+else
+  rsync -a --delete --exclude=.grill-me "$REL/static/" "$WWW/"
+fi
 
 # ---------- 7. systemd ----------
 step "systemd"
