@@ -16,5 +16,7 @@ browsers and Node (Web Crypto only).
 - `encryptJson` / `decryptJson(encKey, id, slot, …)` — AES-256-GCM with `id:slot` as AAD.
 - `sealGrill` / `openGrill` / `sealAnswers` / `openAnswers` — validate + encrypt / decrypt + validate.
 - `contentHash(grill)` — stable hash of a normalized grill.
+- `createMcpHandler({ name, version, instructions, tools })` — the MCP protocol, no I/O;
+  `grillToolDefs({ mode })` — the three grill tool definitions; `clientAgent(clientInfo)` — the metrics allowlist.
 - `makeLink(id, secret, base?)` / `parseLink(url)` — grill links.
 - `b64urlEncode` / `b64urlDecode` — strict unpadded base64url.
