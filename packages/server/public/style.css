@@ -24,7 +24,7 @@ pre { background: var(--code); padding: 8px 10px; border-radius: 6px; white-spac
 
 /* Only the standalone card screen owns the viewport. The shared UI fills its host. */
 #layout { display: flex; justify-content: center; }
-#screen-grill { flex: 1; min-width: 0; max-width: 640px; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+#screen-grill { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
 #grill-root { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #grill-footer { flex-shrink: 0; display: flex; justify-content: center; padding: 0 16px calc(14px + env(safe-area-inset-bottom)); }
 
