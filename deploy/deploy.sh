@@ -14,6 +14,9 @@
 #   7. systemd unit; wait for the API to answer
 #   8. the release's deploy/check.sh (site, long poll through nginx, neighbours unchanged)
 set -euo pipefail
+# Operator wrappers may use 077 for their own evidence. Runtime/public files need traversal;
+# secret env creation and private service data below use explicit restrictive modes instead.
+umask 022
 
 REF="${1:-main}"
 REPO="https://github.com/hoodoos/grill-me"
@@ -71,12 +74,12 @@ step "user"
 if ! id grill-me >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin grill-me
 fi
-mkdir -p "$DATA"
-chown grill-me:grill-me "$DATA"
+install -d -o grill-me -g grill-me -m 700 "$DATA"
 
 # ---------- 4. the release ----------
 step "release ($REF)"
 mkdir -p "$OPT/releases"
+chmod 755 "$OPT" "$OPT/releases"
 if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
   SHA=$REF # an exact commit; GitHub serves reachable shas
 else
@@ -105,10 +108,12 @@ if [ ! -f "$REL/.release-sha" ]; then
   (cd "$REL" && nice -n 19 env GRILL_ME_SKIP_PACK=1 "$NODE" --test)
   (cd "$REL" && "$NODE" packages/server/scripts/build-static.mjs "$REL/static")
   echo "$SHA" > "$REL/.release-sha" # the service shows this as GRILL_ME_VERSION on /stats
-  chown -R root:root "$REL"
 else
   echo "release $SHORT already built"
 fi
+# Also repair a complete release left root-private by an earlier 077 deployment. Never walk
+# all of OPT: backups, markers and private operator evidence are outside this selected tree.
+bash "$HERE/lib/public-tree.sh" "$REL"
 
 # ---------- 5. nginx (before the switch: a failed nginx -t leaves the box as it was) ----------
 step "nginx"
@@ -128,19 +133,20 @@ if [ ! -e "$WWW/.grill-me" ]; then
 else
   rsync -a --delete --exclude=.grill-me "$REL/static/" "$WWW/"
 fi
+bash "$HERE/lib/public-tree.sh" "$WWW"
 
 # ---------- 7. systemd ----------
 step "systemd"
 # /etc/grill-me/env: created once with a random stats token; GRILL_ME_VERSION updated every
 # deploy. The token is never printed.
-mkdir -p /etc/grill-me
+install -d -o root -g grill-me -m 750 /etc/grill-me
 if [ ! -f /etc/grill-me/env ]; then
   TOKEN=$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)
-  printf 'STATS_TOKEN=%s\nMEMORY_MAX_BYTES=268435456\n' "$TOKEN" > /etc/grill-me/env
-  chown root:grill-me /etc/grill-me/env
-  chmod 640 /etc/grill-me/env
+  (umask 077; printf 'STATS_TOKEN=%s\nMEMORY_MAX_BYTES=268435456\n' "$TOKEN" > /etc/grill-me/env)
   echo "created /etc/grill-me/env — read the stats token with: sudo cat /etc/grill-me/env"
 fi
+chown root:grill-me /etc/grill-me/env
+chmod 640 /etc/grill-me/env
 if grep -q '^GRILL_ME_VERSION=' /etc/grill-me/env; then
   sed -i "s/^GRILL_ME_VERSION=.*/GRILL_ME_VERSION=$SHORT/" /etc/grill-me/env
 else
@@ -149,14 +155,25 @@ fi
 cp "$REL/deploy/grill-me.service" "$UNIT"
 systemctl daemon-reload
 systemctl enable grill-me >/dev/null
-systemctl restart grill-me
+STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+startup_diagnostics() {
+  timeout -k 1s 20s bash "$HERE/lib/startup-diagnostics.sh" grill-me "$STARTED_AT" \
+    "$OPT" "$REL" "$WWW" "$DATA" /etc/grill-me/env >&2 || true
+}
+if ! systemctl restart grill-me; then
+  startup_diagnostics
+  die "systemctl couldn't start grill-me"
+fi
 RID=$("$NODE" -e 'console.log(require("crypto").randomBytes(12).toString("base64url"))')
 for i in $(seq 1 30); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8787/api/g/$RID" || true)
+  code=$(curl -s --connect-timeout 1 --max-time 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8787/api/g/$RID" || true)
   [ "$code" = "404" ] && break
   sleep 1
 done
-[ "$code" = "404" ] || die "the API didn't come up on 127.0.0.1:8787"
+if [ "$code" != "404" ]; then
+  startup_diagnostics
+  die "the API didn't come up on 127.0.0.1:8787"
+fi
 echo "API answers on 127.0.0.1:8787"
 
 # ---------- 8. checks ----------
