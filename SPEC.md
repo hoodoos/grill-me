@@ -47,7 +47,7 @@ DELETE ────────────────────────�
 - Anyone with the full link can read and answer the grill. Anyone with only the `id` gets encrypted data they
   can't read, and can't post answers.
 
-## Internal format (`@grill-me/core`)
+## Internal format (`grill-me/core`)
 
 ```jsonc
 // Grill: what gets encrypted and uploaded
@@ -91,8 +91,10 @@ data.
 
 ## Server (`packages/server`)
 
-A plain `node:http` server plus `node:sqlite` (Node 24 LTS), on one small VPS. A CDN in front caches only the
-static page; `/api/*` bypasses the cache.
+A plain `node:http` server plus `node:sqlite` (Node 24 LTS), on the existing DigitalOcean server. The domain's
+DNS points at it. A reverse proxy handles HTTPS (Let's Encrypt), with an idle timeout above 50 s (e.g. nginx
+`proxy_read_timeout 75s`). The server runs as its own system user with its own data folder. The firewall allows
+only 22, 80 and 443.
 
 | Route | Auth | Result |
 |---|---|---|
@@ -127,7 +129,7 @@ static page; `/api/*` bypasses the cache.
   2. Fetch and decrypt the grill. Save the plaintext and swipe progress to localStorage, keyed by a SHA-256
      of the grill's content. A grill re-sent with the same questions resumes where you stopped. Local copies
      expire after 3 days, as on the hub's grill page.
-- Cards: the hub's grill page, extracted into `@grill-me/ui`. Swipe right agrees with ➡️, choice chips pick a
+- Cards: the hub's grill page, extracted into `grill-me/ui`. Swipe right agrees with ➡️, choice chips pick a
   choice, swipe left types your own answer, and skip. It's identical on phone and desktop. Agent Hub uses the
   same package.
 - **Send** encrypts and posts the answers. Then the done screen shows:
@@ -191,8 +193,8 @@ Outside Claude Code, the skill uses `grill_send` and `grill_wait` instead.
 ## Repo layout
 
 ```
-packages/core     @grill-me/core    format, converters, crypto, answer lines (browser + Node, no deps)
-packages/ui       @grill-me/ui      swipe cards (framework-free ES module + CSS), also used by Agent Hub
+packages/core     grill-me/core     format, converters, crypto, answer lines (browser + Node, no deps)
+packages/ui       grill-me/ui       swipe cards (framework-free ES module + CSS), also used by Agent Hub
 packages/server   private           API + static page
 packages/cli      grill-me          CLI + MCP server
 plugin/           Claude Code plugin: skill + .mcp.json
@@ -200,19 +202,21 @@ plugin/           Claude Code plugin: skill + .mcp.json
 
 npm workspaces, Node 24 LTS, ES modules, tests run with `node --test`.
 
+Published to npm as **one package, `grill-me`**: the CLI and MCP server, plus subpath exports `grill-me/core`
+and `grill-me/ui`, which Agent Hub imports. `packages/core` and `packages/ui` are workspaces bundled into it,
+not separate npm packages.
+
 ## Milestones
 
 1. **core**: the format, converters (with the hub's grill fixtures), crypto and answer lines, all tested.
-2. **server + page**: `@grill-me/ui` extracted from the hub's grill page in `public/index.html`, deployed to
+2. **server + page**: `grill-me/ui` extracted from the hub's grill page in `public/index.html`, deployed to
    grill-me.ai.
 3. **CLI + skill**: Claude Code end to end. **Test early** that a QR printed in a code block in a Claude Code
    reply scans; if it doesn't, fall back to the link only, plus a QR on desktop via a `/qr/<id>` page.
 4. **MCP server** for Codex.
-5. **Agent Hub** switches its grill page to `@grill-me/ui` and `@grill-me/core`.
+5. **Agent Hub** switches its grill page to `grill-me/ui` and `grill-me/core`.
 
 ## Open questions
 
-- **npm packaging**: one `grill-me` package with subpath exports, or an `@grill-me` scope.
-- **Host machine**: which existing machine runs the server, and how it's exposed to the internet.
-
-Decided: MIT license. The Agent Hub waitlist comes later; until then the done screen links to a placeholder.
+None left. Decided: MIT license; one npm package `grill-me`; hosted on the existing DigitalOcean server. The
+Agent Hub waitlist comes later; until then the done screen links to a placeholder.
