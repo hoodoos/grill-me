@@ -78,6 +78,11 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
     renderCard(animate);
   }
 
+  function setNote(text) {
+    noteText = text || "";
+    if (S.view === "summary" || S.view === "list") render();
+  }
+
   function renderCard(animate) {
     const i = mach.currentIndex(), q = grill.questions[i], a = S.answers[i], text = S.view === "text";
     stage.textContent = "";
@@ -311,9 +316,6 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
   return {
     destroy() { root.classList.remove("gm-root"); root.textContent = ""; },
     answers: () => mach.toAnswers(), // what Copy answers uses while the cards are up
-    setNote(text) {
-      noteText = text || "";
-      if (S.view === "summary" || S.view === "list") render();
-    },
+    setNote,
   };
 }
