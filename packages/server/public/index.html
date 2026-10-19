@@ -2,55 +2,46 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Grill Me — your agent's questions as swipe cards</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<title>Grill Me — a good question changes everything</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=1b0d9aaf5c07">
+<link rel="stylesheet" href="/ui/grill.css?v=04f928494bc5">
+<link rel="stylesheet" href="/home.css?v=af8848ba7a30">
 <link rel="alternate" type="text/markdown" href="/install">
+<script type="module" src="/home-demo.js?v=7616e2cef41b"></script>
 </head>
-<body>
-<main class="landing">
-  <h1>Grill Me</h1>
-  <p>Your coding agent has questions. Grill Me turns them into swipe cards on your phone. Your
-    answers go straight back into the agent's session, and <strong>grill-me.ai can't read any of
-    it</strong>.</p>
-
-  <h2>Install with your agent</h2>
-  <p>Paste this to your agent: Install Grill Me from https://grill-me.ai/install</p>
-  <!-- install guide (rendered from site/install.md) -->
-
-  <p>It's a free, open-source taster for <a href="/hub">Agent Hub</a>: the same grill UI, without
-    accounts.</p>
-
-  <h2>How it works</h2>
-  <ol class="steps">
-    <li>Your agent shows the questions in chat, adds a phone link, and waits.</li>
-    <li>You open it on your phone and answer by swiping.</li>
-    <li>The answers land in the agent's session within a second, end-to-end encrypted.</li>
-  </ol>
-
-  <h2>Privacy</h2>
-  <p>With the CLI, plugins and local MCP, questions and answers are encrypted on your devices
-    before upload. The encryption key is in the part of the link after <code>#</code>, which
-    browsers do not send to the server. The server stores encrypted content.</p>
-  <p>Treat the full link as private: anyone who has it can read and answer that grill.
-    The agent deletes the server copy after collecting the answers. Otherwise, it expires
-    one hour after creation, or one hour after answers are submitted.</p>
-  <p>Your browser keeps the key, readable questions and answer progress locally so you can
-    reload or resume. Clear this site's browser data to remove those local copies. Your
-    agent and its provider can also see the questions and returned answers in your session.</p>
-
-  <div class="cta">
-    <a class="primary" href="/demo">Try the demo</a>
-    <a href="https://github.com/hoodoos/grill-me">GitHub</a>
-  </div>
-
-  <h2>For your agent</h2>
-  <p>Built for claude.ai, the Claude apps, Claude Code and Codex. The <code>npx grill-me-ai</code>
-    CLI, the Claude Code plugin and the MCP setup are coming soon — the demo above works today.</p>
-  <h2>Credits</h2>
-  <p>Grill Me uses <a href="https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md">Matt Pocock's complete grilling skill</a>,
-    bundled unchanged under the MIT license. Grill Me adds the phone swipe UI and encrypted delivery.</p>
+<body class="home">
+<main>
+  <section class="home-play" aria-label="Try grilling">
+    <header class="home-nav"><a class="home-brand" href="/">Grill Me<span>Good questions. Clear thinking.</span></a><a class="home-install" href="#install">Install ↗</a></header>
+    <p class="home-invite">Less back-and-forth. More <em>aha.</em> Try a question.</p>
+    <div id="home-grill" aria-label="Local interactive demo"></div>
+    <section id="home-complete" hidden aria-labelledby="complete-title">
+      <span class="home-eyebrow">That's grilling.</span><h1 id="complete-title">Bring your next idea.</h1>
+      <p>Your agent brings the questions. You bring your perspective.</p>
+      <p>This was just a local demo. Nothing was sent or saved.</p>
+      <a class="home-install" href="#install">Let's install Grill Me ↗</a>
+    </section>
+    <footer class="home-demo-tools"><span>Swipe right to agree · left for your own answer</span><span class="home-hint-short">← Own · Agree →</span><button id="home-replay" type="button">Replay</button><a href="#install">Skip to install ↓</a></footer>
+    <noscript><p class="home-noscript">The swipe demo needs JavaScript. You can install Grill Me below without trying it.</p></noscript>
+  </section>
+  <section class="home-section" id="install" aria-labelledby="install-title">
+    <span class="home-eyebrow">A little less typing. A lot more clarity.</span>
+    <h1 id="install-title">Paste into your agent</h1>
+    <p>Give your next conversation a phone-sized thinking space.</p>
+    <div class="copy-window home-paste"><div class="copy-toolbar"><span>Agent prompt</span><button type="button" data-copy-target="install-prompt" aria-label="Copy install prompt">Copy</button></div><pre><code id="install-prompt" tabindex="0">Install Grill Me from https://grill-me.ai/</code></pre><p class="copy-status" role="status" aria-live="polite"></p></div>
+    <p class="home-trust">No account. End-to-end encrypted rounds. Built around <a href="https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md">Matt Pocock's complete grilling skill</a>. <a href="#privacy">How your privacy works ↓</a></p>
+    <p class="home-small">Your agent can read the install guide and show the steps before installing. Prefer to set it up yourself?</p>
+    <div id="install-commands">
+    <!-- install guide (rendered from site/install.md) -->
+    </div>
+  </section>
+  <section class="home-section home-details" aria-label="About Grill Me">
+    <div><span class="home-eyebrow">Your conversation, your space</span><h2>One interview. One phone link.</h2><p>Grilling is a focused AI interview: your agent explores an idea with you, asks the next useful questions, and follows the answers. Swipe through each small round on your phone. Keep the same page open as new questions arrive.</p><p>Works with the CLI, Claude Code and local MCP clients, including Codex. Hosted web/mobile connectors are not included in 0.2.</p></div>
+    <div id="privacy"><span class="home-eyebrow">Private by design</span><h2>Questions stay between you and your agent.</h2><p>Questions and answers are encrypted on your devices. The link's key stays after <code>#</code>, which browsers do not send to the server. Treat the full link as private: anyone with it can read and answer.</p><p>The relay keeps only the current encrypted round and uncollected answers. Acknowledgement clears those ciphertexts; it keeps no interview history. Publishing a round, submitting answers or acknowledging collection refreshes a one-hour expiry. A minimal ID, end reason and expiry receipt lasts up to ten minutes so an open phone can distinguish finishing, cancellation and expiry.</p><p>The phone keeps the current key and unconfirmed draft locally for reloads; previous-round plaintext is cleared on confirmed transitions, and session state is purged when it ends. An offline browser cannot learn an ending until it reconnects. Your agent and its provider can see your conversation. This homepage demo uses memory only.</p></div>
+    <div><span class="home-eyebrow">Built on good questions</span><h2>With thanks to Matt Pocock.</h2><p>Grill Me ships <a href="https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md">Matt Pocock's complete grilling skill</a>, unchanged under MIT. It adds phone-friendly swipe cards and encrypted delivery to that full interview workflow.</p><p>A free, open-source taster for <a href="/hub">Agent Hub</a>. No account needed.</p><p><a href="https://github.com/hoodoos/grill-me">Source on GitHub ↗</a></p></div>
+  </section>
 </main>
 </body>
 </html>

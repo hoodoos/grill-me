@@ -70,7 +70,7 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  const bounds=await page.evaluate(()=>{const a=document.querySelector('.gm-text .gm-primary').getBoundingClientRect(),b=document.querySelector('.gm-card').getBoundingClientRect(),c=document.querySelector('.gm-bar').getBoundingClientRect();return {next:a.bottom,card:b.bottom,bar:c.top}});assert.ok(bounds.next<=bounds.card&&bounds.next<bounds.bar);
  await page.locator('.gm-text .gm-primary').click();await page.locator('.gm-send').click();await page.locator('#screen-done:not([hidden])').waitFor();
  const second=await wait(one.id,{...opts,seconds:2});assert.equal(second.lines,'Q1 - Current round draft');await second.ack();
- await finish(one.id,opts);await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
+ await finish(one.id,opts);await page.locator('#message-text').filter({hasText:'All done\u2014your agent has finished this grill.'}).waitFor();
  assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('gm:s2:')).length),0);
  assert.ok(requests.some(r=>r.phase===1&&r.path==='/app.js'));assert.ok(requests.some(r=>r.phase===1&&r.path==='/core/index.js'));
  for(const p of ['/entry-020.js','/session-app.js','/core/session.js'])assert.ok(requests.some(r=>r.phase===2&&r.path===p),p);
@@ -94,7 +94,7 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  await page.locator('#screen-done:not([hidden])').waitFor();
  const recovered=await wait(offline.id,{...opts,seconds:2});
  assert.equal(recovered.lines,'Q1 - Original offline draft');await recovered.ack();
- await finish(offline.id,opts);await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
+ await finish(offline.id,opts);await page.locator('#message-text').filter({hasText:'All done\u2014your agent has finished this grill.'}).waitFor();
 
  // A different device winning must not turn the losing draft into a sent claim, even on reload.
  const losing=await sendRound(grill,opts);
@@ -114,7 +114,7 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  const winner=await wait(losing.id,{...opts,seconds:2});assert.equal(winner.lines,'Q1 - agree');await winner.ack();
  await page.locator('#screen-message:not([hidden])').waitFor();
  assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('gm:s2:r:')).length),0);
- await finish(losing.id,opts);await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
+ await finish(losing.id,opts);await page.locator('#message-text').filter({hasText:'All done\u2014your agent has finished this grill.'}).waitFor();
  // Same-browser tabs share current-only storage. A retained old textarea callback must
  // not repopulate round 1 after another tab observes the next round or session end.
  const twins=await sendRound(grill,opts);
@@ -133,8 +133,8 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  assert.equal(await other.evaluate(id=>localStorage.getItem(`gm:s2:r:${id}:1`),twins.id),null);
  assert.equal(await other.locator('.gm-send').count(),0);
  await cancel(twins.id,opts);
- await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
- await other.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
+ await page.locator('#message-text').filter({hasText:'This grill was cancelled.'}).waitFor();
+ await other.locator('#message-text').filter({hasText:'This grill was cancelled.'}).waitFor();
  await other.close();
  // Deterministic late-work fault: hold an actual WebCrypto decrypt and delay only the
  // existing 200ms swipe-commit callback. Neither may recreate round 1 after round 2 mounts.
@@ -165,12 +165,12 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  assert.equal(await page.evaluate(id=>localStorage.getItem(`gm:s2:r:${id}:1`),late.id),null);
  assert.equal(await page.locator('.gm-send').count(),0);
  assert.equal(await page.locator('.gm-card').isVisible(),true);
- await cancel(late.id,opts);await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
+ await cancel(late.id,opts);await page.locator('#message-text').filter({hasText:'This grill was cancelled.'}).waitFor();
  const wrong=await sendRound(grill,opts);
  await page.goto(wrong.link.split('#')[0]+'#'+newSecret());
  await page.locator('#message-text').filter({hasText:"key can't open these questions"}).waitFor();
  assert.equal(await page.locator('.gm-card').count(),0);
- await cancel(wrong.id,opts);await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
+ await cancel(wrong.id,opts);await page.locator('#message-text').filter({hasText:'This grill was cancelled.'}).waitFor();
  assert.deepEqual(errors,[]);
  assert.equal(requests.some(r=>r.phase===2&&['/app.js','/core/index.js','/core/crypto.js'].includes(r.path)),false,'unchanged legacy modules were actually reused from the warm cache');
  console.log(JSON.stringify({result:'PASS',warmSameOriginCache:true,cacheCleared:false,networkRoutesUsed:false,rounds:2,stableLink:true,actualTouch:['right-agree','left-own'],reloadDraft:true,short350:bounds,finishPurge:true,offlineApiReload:true,immutableSubmission:true,losingDeviceCopy:true,lateAsyncAndTabGuards:true,pageerrors:errors,requests},null,2));

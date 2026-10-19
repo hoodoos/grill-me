@@ -111,6 +111,8 @@ let mountedRound = 0; // the round the cards currently belong to
 let currentGrill = null; // memory-only, for the grill screen's Copy answers while unsent
 let grillUi = null;
 let pollAbort = null;
+let awaitingNext = false; // true only after an authoritative idle/ACK snapshot
+let refreshPoll = false; // reconnect must re-read state even if offline happened between polls
 
 const stale = () => Object.assign(new Error("stale round"), { userMessage: "This round moved on." });
 
@@ -128,10 +130,30 @@ const show = (screen) => {
 function message(text) {
   retireRoot();
   currentGrill = null;
+  $("screen-message").classList.remove("session-thinking");
+  $("thinking-stack")?.remove();
+  const home = $("screen-message").querySelector("a");
+  if (home) home.textContent = "Grill Me";
   $("message-text").textContent = text;
   show("screen-message");
 }
-const waiting = () => message("Your agent has your answers. Waiting for the next questions…");
+const waiting = () => {
+  message("Your agent is thinking. Keep this page open—your next questions will appear here.");
+  const screen = $("screen-message");
+  screen.classList.add("session-thinking");
+  const stack = document.createElement("div");
+  stack.id = "thinking-stack";
+  stack.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 3; i++) stack.append(document.createElement("span"));
+  screen.prepend(stack);
+  const home = screen.querySelector("a");
+  if (home) home.textContent = "Back to Grill Me";
+};
+function pauseThinking() {
+  if (!$("screen-message").hidden && $("screen-message").classList.contains("session-thinking")) {
+    message("Can't reach grill-me.ai right now. Try again in a moment.");
+  }
+}
 
 // The relay accepted our ciphertext: readable round data is purged immediately (the encrypted
 // intent stays, digest-bound, until the ack/advance), and the page waits — the poll loop mounts
@@ -139,6 +161,7 @@ const waiting = () => message("Your agent has your answers. Waiting for the next
 function sentScreen() {
   retireRoot();
   currentGrill = null;
+  $("thinking-stack")?.remove();
   $("done-title").textContent = "Sent ✓";
   $("done-text").textContent = "Waiting for your agent to pick up your answers.";
   $("done-lines").hidden = true;
@@ -167,16 +190,47 @@ $("copy-answers").addEventListener("click", copyAnswers);
 $("done-copy").addEventListener("click", copyAnswers);
 
 // ---------- relay snapshots ----------
-function ended() {
+const END_MESSAGES = {
+  finished: "All done—your agent has finished this grill.",
+  cancelled: "This grill was cancelled.",
+  expired: "This session expired.",
+};
+let endReason = null;
+const knownReason = (reason) => Object.hasOwn(END_MESSAGES, reason) ? reason : null;
+async function terminalReason(response) {
+  try { return knownReason((await response.json()).reason); } catch { return null; }
+}
+function ended(reason) {
   if (!alive) return;
   alive = false;
+  awaitingNext = false;
   gen++; // in-flight fetch/decrypt/onChange/POST callbacks die at their next guard
   try { pollAbort?.abort(); } catch {}
   purgeAll(); // an observed finish/404/expiry clears the session key and all plaintext
   secret = null;
   writeToken = null;
   retireRoot();
-  message("Session ended or expired."); // generic: never an invented completion
+  endReason = knownReason(reason);
+  message(END_MESSAGES[endReason] ?? "Session ended or expired.");
+}
+
+// No key is needed to read an end receipt. This also handles reload after purge and a second
+// tab whose key was purged by the first; it never saves keys/plaintext or reopens retired cards.
+async function checkEndWithoutKey() {
+  const generation = gen;
+  try {
+    const r = await fetchBounded(`/api/s/${id}`, {}, SYNC_BOUND_MS);
+    const reason = r.status === 404 ? await terminalReason(r) : null;
+    if (gen !== generation || secret) return;
+    if (r.status === 404) {
+      if (alive) ended(reason);
+      else if (!endReason && reason) { endReason = reason; message(END_MESSAGES[reason]); }
+    } else if (r.status === 200 && alive) {
+      message("This link is missing its key. Open the full link from your agent.");
+    }
+  } catch {
+    if (alive && gen === generation && !secret) message("Can't reach grill-me.ai right now. Try again in a moment.");
+  }
 }
 
 function mountRound(grill, round, snap, note) {
@@ -184,6 +238,7 @@ function mountRound(grill, round, snap, note) {
   const g = ++gen; // late callbacks from the previous mount's timers become stale
   mountedRound = round;
   currentGrill = grill;
+  $("thinking-stack")?.remove();
   saveRound(round, { grill });
   retireRoot();
   show("screen-grill");
@@ -227,8 +282,9 @@ function applySnapshot(snap) {
   if (snap.round < mountedRound) return;
   const seen = readJson(curKey(id));
   if (seen?.revision > snap.revision) return; // another tab has already observed the next state
-  if (snap.expiresAt && snap.expiresAt <= Date.now()) return ended();
+  // The relay decides expiry; a device clock ahead of the relay must not invent an end reason.
   revision = snap.revision;
+  awaitingNext = snap.state === "idle";
   safeSet(curKey(id), JSON.stringify({ ts: Date.now(), round: snap.round, revision: snap.revision }));
 
   if (snap.state === "pending" && typeof snap.ct === "string" && typeof snap.iv === "string") {
@@ -243,6 +299,7 @@ function applySnapshot(snap) {
         return;
       }
     }
+    if ($("screen-message").classList.contains("session-thinking")) message("Updating questions…");
     void mountRoundFromRelay(snap);
     return;
   }
@@ -377,7 +434,11 @@ async function settleIntent(round, intent, r, g) {
     gen++;
     return;
   }
-  if (r.status === 404) { ended(); return; }
+  if (r.status === 404) {
+    const reason = await terminalReason(r);
+    if (alive && gen === g) ended(reason);
+    return;
+  }
   if (r.status === 409) {
     if (!alive || gen !== g) return;
     // A different submission won this round. Never claim ours were delivered; the draft stays
@@ -404,10 +465,11 @@ const untilEvent = (target, event, ok = () => true) =>
 
 async function syncOnce() {
   const generation = gen;
-  let r, snap;
+  let r, snap, reason;
   try {
     r = await fetchBounded(`/api/s/${id}`, {}, SYNC_BOUND_MS); // an immediate snapshot
     if (r.status === 200) snap = await r.json();
+    else if (r.status === 404) reason = await terminalReason(r);
     else if (r.status !== 404) throw new Error(`HTTP ${r.status}`);
   } catch {
     if (!alive || gen !== generation) return;
@@ -425,29 +487,33 @@ async function syncOnce() {
     return; // the poll loop keeps retrying in the background
   }
   if (!alive || gen !== generation) return;
-  if (r.status === 404) return ended();
+  if (r.status === 404) return ended(reason);
   applySnapshot(snap);
 }
 
 async function pollLoop() {
   let failures = 0;
   while (alive) {
-    if (!navigator.onLine) { await untilEvent(window, "online"); continue; }
+    if (!navigator.onLine) { pauseThinking(); failures = Math.max(failures, 1); await untilEvent(window, "online"); continue; }
     if (document.visibilityState !== "visible") {
       await untilEvent(document, "visibilitychange", () => document.visibilityState === "visible");
       continue;
     }
-    let r, snap;
+    let r, snap, reason;
     try {
       const ac = new AbortController();
       pollAbort = ac;
-      r = await fetchBounded(`/api/s/${id}?after=${revision}&wait=${POLL_WAIT_S}`, { signal: ac.signal }, POLL_BOUND_MS);
+      const query = refreshPoll || failures ? "wait=0" : `after=${revision}&wait=${POLL_WAIT_S}`;
+      refreshPoll = false;
+      r = await fetchBounded(`/api/s/${id}?${query}`, { signal: ac.signal }, POLL_BOUND_MS);
       if (r.status === 200) snap = await r.json();
+      else if (r.status === 404) reason = await terminalReason(r);
       else if (r.status !== 204 && r.status !== 404) throw new Error(`HTTP ${r.status}`);
       pollAbort = null;
     } catch {
       pollAbort = null;
       if (!alive) return;
+      pauseThinking();
       failures++;
       const delay = Math.min(30_000, 400 * 2 ** Math.min(failures - 1, 6)) + Math.floor(Math.random() * 300);
       await sleep(delay);
@@ -455,21 +521,30 @@ async function pollLoop() {
     }
     if (!alive) return;
     failures = 0;
-    if (r.status === 404) { ended(); return; }
+    if (r.status === 404) { ended(reason); return; }
     if (r.status === 200) {
       applySnapshot(snap);
+    } else if (r.status === 204 && awaitingNext && !$("screen-message").classList.contains("session-thinking")) {
+      waiting(); // a successful unchanged poll confirms the idle state after reconnect
     }
     if (alive) await sleep(150);
   }
 }
 
 // ---------- boot ----------
+window.addEventListener("offline", () => { refreshPoll = true; pauseThinking(); pollAbort?.abort(); });
+window.addEventListener("online", () => { if (!secret) void checkEndWithoutKey(); });
 window.addEventListener("storage", (event) => {
-  if (alive && event.key === secKey(id) && event.newValue === null) return ended();
+  if (alive && event.key === secKey(id) && event.newValue === null) {
+    ended(); // purge immediately; learn the authoritative reason without keeping the key
+    void checkEndWithoutKey();
+    return;
+  }
   if (!alive || !writeToken || event.key !== curKey(id)) return;
   const seen = readJson(curKey(id));
   if (seen?.revision > revision) {
     gen++;
+    awaitingNext = false;
     mountedRound = 0;
     message("Updating questions…");
     void syncOnce();
@@ -492,7 +567,8 @@ if (params.get("session") !== "2" || !/^[A-Za-z0-9_-]{16}$/.test(id)) {
     if (saved?.secret && /^[A-Za-z0-9_-]{22}$/.test(saved.secret)) secret = saved.secret;
   }
   if (!secret) {
-    message("This link is missing its key. Open the full link from your agent.");
+    message("Checking this session…");
+    void checkEndWithoutKey();
   } else {
     const keySecret = secret;
     try {
