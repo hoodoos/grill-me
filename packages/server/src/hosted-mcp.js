@@ -14,12 +14,14 @@ const ORIGINS = new Set([ORIGIN, "https://claude.ai", "https://chatgpt.com"]);
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const PREPARE_MS = 600_000;
 const UPSTREAM = readFileSync(new URL("../../core/src/grilling.md", import.meta.url), "utf8");
-const INLINE_GUIDANCE = "After the FIRST READY, call grill_show ONCE with this saved link. Supporting MCP Apps hosts render the swipe cards; others keep the SAME phone-link fallback. Keep the SAME view across every later round; never refresh it with another grill_show. In-chat committed Send requests a UI follow-up: read/retain/ACK and publish the next frontier. Use UI follow-up for an actually rendered inline view, phone events for the phone path; do not subscribe to native events merely to duplicate inline follow-ups. ";
+const INLINE_YIELD = "INLINE: when the cards render, end your turn to let the user answer; do not call grill_wait or keep a tool loop active while awaiting inline input. On a submitted-answers UI follow-up, call grill_wait ONCE with seconds:1 for that exact round. ANSWERS: read and retain the answer lines, ACK the exact receipt, recompute and publish the next frontier, then end your turn again with the SAME view open. Unexpected WAITING: do not ACK, poll repeatedly or republish; end your turn and await a new submission follow-up or an explicitly registered wake. A UI message being accepted is not answer receipt. ";
+const INLINE_GUIDANCE = "After the FIRST READY, call grill_show ONCE with this saved link. Supporting MCP Apps hosts render the swipe cards; others keep the SAME phone-link fallback. Keep the SAME view across every later round; never refresh it with another grill_show. " + INLINE_YIELD + "Use UI follow-up for an actually rendered inline view, phone events for the phone path; do not subscribe to native events merely to duplicate inline follow-ups. PHONE automatic wake requires an actually supported, successfully registered subscription; server advertisement alone does not establish it. Without that registration, only bounded polling during an active host turn is available. ";
+const WAITING_GUIDANCE = "INLINE: end your turn; do not repeat grill_wait while awaiting inline input. A confirmed submitted-answers follow-up gets one seconds:1 read; unexpected WAITING never authorizes ACK or another round. PHONE: retry bounded waits only while this host turn remains active, or use a supported, successfully registered event subscription. Merely advertising events does not register a wake, and polling cannot wake an ended turn.";
 export const HOSTED_INSTRUCTIONS =
-  "Grill Me interviews: call grill_start once, retain its private link; grill_send publishes each explicit round on that same link. Show every question in full, then 'Grill it on your phone' and the link. grill_wait returns answers without clearing them. Only AFTER receiving and retaining the answer lines, call grill_ack with the exact receipt; then publish the next round or grill_finish. WAITING: repeat wait. Retry uncertain writes with the same arguments. Never ACK before receiving answers. " +
+  "Grill Me interviews: grill_start once; retain its link for grill_send rounds. INLINE: render with grill_show, then end your turn; do not call grill_wait until a submitted-answers UI follow-up. Read that round once with seconds:1. Only AFTER receiving and retaining answers, grill_ack its exact receipt; publish the next frontier and yield again. PHONE: bounded waits or a confirmed supported event subscription. Retry uncertain writes identically; never ACK before receiving answers. " +
   "An explicit grilling request uses these tools even for one clarification; otherwise a lone unsolicited question can stay in chat. Follow the complete unchanged Matt Pocock workflow below. Never attach unrelated interviews to a previous link. Keep the link private; it contains the encryption capability. " +
   "App mode handles plaintext and keys transiently on Grill Me's server; only ciphertext is persisted. The model/provider also sees the questions, answers and private link. Do not print QR codes. Finish only after shared-understanding confirmation; cancel when abandoning the interview. No answer history is kept here.\n\n" + INLINE_GUIDANCE + "\n\n" + UPSTREAM;
-const CONTINUATION = "Keep the user on the SAME phone page for the whole interview, including final shared-understanding confirmation as a phone round. Make the phone link visible BEFORE blocking waits. With native MCP Events, subscribe to grill.answers_ready for this private link so the SAME subscribed host chat wakes automatically, then wait/read/retain/ACK and publish the next frontier. A webhook2xx is NOT answer delivery or ACK. Without wake support, immediately call grill_wait and repeat WAITING while the host keeps its turn active; this cannot wake an ended turn. Never ask the user to type answered/done or ask permission merely to continue. Grok automations are fresh runs, NOT the previous chat: save/read/update the design tree and answers in a host-owned durable checkpoint before ACK; missing toolable persistent context means automatic continuation is unavailable and answers MUST NOT be ACKed. ";
+const CONTINUATION = "Keep the SAME inline view or phone page for the whole interview, including final shared-understanding confirmation as a round. " + INLINE_YIELD + "PHONE ONLY: show the complete questions and private phone link before waiting. In a host that actually supports native MCP Events, successfully register grill.answers_ready for this private link before relying on a same-chat wake; server capability advertisement alone is not a subscription. On that wake, read/retain/ACK and publish the next frontier. A webhook2xx is NOT answer delivery or ACK. Without a registered wake, repeat bounded grill_wait calls only while the PHONE host turn stays active; this cannot wake an ended turn. Never ask the user to type answered/done or ask permission merely to continue. Grok automations are fresh runs, NOT the previous chat: save/read/update the design tree and answers in a host-owned durable checkpoint before ACK; missing toolable persistent context means automatic continuation is unavailable and answers MUST NOT be ACKed. ";
 
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
 const fail = code => { throw Object.assign(new Error(code), { safeCode: code }); };
@@ -43,8 +45,8 @@ const TOOLS = [
     link: linkField, round: field("Explicit round:1 first, then current+1.", "integer"), expectedRevision: field("0 on first publish, then exact idle revision from ACK.", "integer"),
     grill: HOSTED_GRILL_SCHEMA, text: field("Preferred: complete current frontier in Matt's original numbered ❓ question / ➡️ recommended-answer format, with --- between questions."), title: field("Optional interview name."),
   }, ["link", "round", "expectedRevision"]),
-  def("grill_wait", "Wait for this exact round's answers (default45 seconds, max50). WAITING: call again with same link/round. ANSWERS: retain/read the actual answer lines THEN call grill_ack with the exact returned receipt. Merely returning answers never clears them. IDLE means already acknowledged; publish next round or finish.", {
-    link: linkField, round: field("The explicit published round.", "integer"), seconds: field("Wall-clock wait budget, default45/max50 seconds.", "integer"),
+  def("grill_wait", "Read this exact round's answers. INLINE: only after a submitted-answers UI follow-up, call ONCE with seconds:1; unexpected WAITING means yield, not another blocking wait. Do not call while the user is still answering inline. PHONE: default45/max50 seconds, repeat WAITING only in an active polling turn or read on a registered event wake. ANSWERS: read/retain actual lines THEN grill_ack the exact receipt. Returning answers never clears them. IDLE means already acknowledged; publish next frontier or finish.", {
+    link: linkField, round: field("The explicit published round.", "integer"), seconds: field("INLINE follow-up:1 second, one read. PHONE polling: default45/max50 seconds.", "integer"),
   }, ["link", "round"], { readOnlyHint: true }),
   def("grill_ack", "Confirm you actually RECEIVED AND RETAINED the answers from grill_wait. Pass its exact receipt unchanged, including original expectedRevision. This clears only that round's ciphertexts. Retry identical ACK after lost reply; a late old ACK cannot erase the next round. Never call this before receiving answer lines.", {
     link: linkField, receipt: { type: "object", additionalProperties: false, properties: {
@@ -65,7 +67,7 @@ const TOOLS = [
   }, ["link", "url"]),
 ];
 const resource = appResource();
-const showTool = def("grill_show", "Display the current interview as interactive swipe cards inside a host that supports MCP Apps. Call AFTER publishing, with the saved private link. This separate render tool does not publish or collect. Keep this view for subsequent rounds; do not call again to refresh it. Unsupported hosts use the SAME phone link from grill_send. In-chat Send requests a host follow-up; read/retain with grill_wait, ACK explicitly and publish next frontier. Use UI follow-up for in-chat, native events for phone; duplicate wakeups never authorize duplicate rounds.", { link: linkField }, ["link"], { readOnlyHint: true });
+const showTool = def("grill_show", "Render swipe cards AFTER first publish, then end your turn for inline input; do not follow with grill_wait. Keep the SAME view across rounds, never call again to refresh. Committed Send requests a UI follow-up: read ONCE with grill_wait seconds:1, retain, ACK exact receipt, publish next frontier and end your turn again. This read-only render never collects or ACKs. If no interactive view renders, use the SAME phone link and the separate phone wait/event path. Duplicate wakeups never authorize duplicate rounds.", { link: linkField }, ["link"], { readOnlyHint: true });
 showTool._meta.ui.resourceUri = resource.uri;
 TOOLS.push(showTool);
 for (const tool of [
@@ -177,7 +179,8 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
     const snapshot = await invoke("snapshot");
     if (snapshot.status === 404 && name !== "grill_send") return ended(snapshot);
     if (snapshot.status !== 404) check(snapshot);
-    if (name === "grill_show") return out("VIEW", { round: snapshot.body.round, revision: snapshot.body.revision, viewLink: args.link });
+    if (name === "grill_show") return out("VIEW", { round: snapshot.body.round, revision: snapshot.body.revision, viewLink: args.link,
+      nextAction: "YIELD_FOR_INLINE_INPUT", message: INLINE_YIELD });
     if (name === "grill_ui_state") {
       const r = args.afterRevision === undefined ? snapshot : await invoke("state", { afterRevision: args.afterRevision }, undefined, args.seconds ?? 25);
       if (r.status === 404) return ended(r); check(r);
@@ -233,7 +236,7 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
       {
         const r = await invoke("answers", null, args.round, (args.seconds ?? 45));
         if (r.status === 404) return ended(r); check(r);
-        if (r.status === 204) return out("WAITING", { round: args.round });
+        if (r.status === 204) return out("WAITING", { round: args.round, message: WAITING_GUIDANCE });
         // Decrypt current question context from the same round snapshot, only in this call.
         const grill = await openRound(snapshot.body, { ...ids, round: args.round });
         const answers = await openRoundAnswers(r.body, grill, { ...ids, round: args.round });
@@ -368,18 +371,18 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
       // Some hosts expose only text content to their model. Include the exact capability,
       // state and ACK receipt there as well as structuredContent; PREPARED is never ready.
       const view = value.viewLink; delete value.viewLink;
-      const text = value.status === "VIEW" ? "Interactive cards are available in supporting hosts. Otherwise use the SAME private phone link already returned by grill_send. No answers have been collected."
+      const text = value.status === "VIEW" ? `STATUS: VIEW\nNext action: ${value.nextAction}\n${value.message}\nIf no interactive view renders, use the SAME private phone link and the PHONE wait/event path. No answers have been collected.`
         : value.status === "PREPARED"
         ? `STATUS: PREPARED\n${JSON.stringify({ ...value, grillingInstructions: undefined })}\n\nRead and follow this complete grilling workflow BEFORE drafting questions:\n\n${value.grillingInstructions}\n\nPrivate capability only: publish the first round before showing the phone as ready.`
         : value.status === "ANSWERS" ? `${value.answers}\nSTATUS: ANSWERS\nACK receipt: ${JSON.stringify(value.receipt)}\n${value.message}`
         : `STATUS: ${value.status}\n${JSON.stringify(value)}${value.status === "PREPARED" ? "\nPrivate capability only: publish the first round before showing the phone as ready." : ""}` +
-          (value.status === "READY" ? "\nShow the complete questions, then:\nGrill it on your phone\n" + value.link + (value.round === 1 ? "\n" + INLINE_GUIDANCE : "") : "");
+          (value.status === "READY" ? "\nShow the complete questions, then:\nGrill it on your phone\n" + value.link + (value.round === 1 ? "\n" + INLINE_GUIDANCE : "\nIf the inline view is already open, keep that SAME view and end your turn; do not call grill_wait while awaiting inline input. Otherwise continue the PHONE wait/event path: automatic wake requires an actually supported, successfully registered subscription, not server advertisement.") : "");
       const body = response(id, { content: [{ type: "text", text }], structuredContent: value, ...(view ? { _meta: { "ai.grill-me/view": { link: view } } } : {}) });
       if (!res.destroyed) sse ? res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`) : reply(200, body);
     } catch (e) {
       const timed = controller.signal.aborted && ["grill_wait", "grill_ui_state"].includes(tool.name);
-      const value = timed ? out("WAITING", { round: args.round }) : null;
-      const body = response(id, timed ? { content: [{ type: "text", text: "STATUS: WAITING. Call again with the same link and round." }], structuredContent: value }
+      const value = timed ? out("WAITING", { round: args.round, ...(tool.name === "grill_wait" ? { message: WAITING_GUIDANCE } : {}) }) : null;
+      const body = response(id, timed ? { content: [{ type: "text", text: `STATUS: WAITING. ${value.message ?? "Retry the current view state request."}` }], structuredContent: value }
         : { isError: true, content: [{ type: "text", text: safeMessages[e?.safeCode] ?? safeMessages.UNAVAILABLE }] });
       if (!res.destroyed) sse ? res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`) : reply(200, body);
     } finally {

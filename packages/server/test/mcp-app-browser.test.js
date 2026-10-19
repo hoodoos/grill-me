@@ -16,7 +16,7 @@ test("official AppBridge opaque sandbox: completed result, real swipes, exact lo
   await new Promise(r => srv.server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${srv.server.address().port}`;
   const errors = [], calls = [], messages = [], requests = [];
-  let browser, host, sequence = 0, context, lost = true, releaseAgent, lossMode = false, noMessage = false;
+  let browser, host, sequence = 0, context, lost = true, releaseAgent, lossMode = false, noMessage = false, collectMessages = true;
   const agentGate = new Promise(resolve => { releaseAgent = resolve; });
   const retained = [], hostFailures = [];
   t.after(async () => { await browser?.close(); host?.closeAllConnections(); if (host?.listening) await new Promise(r => host.close(r)); srv.server.closeAllConnections(); await srv.close(); });
@@ -77,7 +77,7 @@ test("official AppBridge opaque sandbox: completed result, real swipes, exact lo
       if (req.url === "/context") return res.end(JSON.stringify(context));
       if (req.url === "/message") {
         messages.push(body); const isError = messages.length === 1; res.end(JSON.stringify({ isError }));
-        if (!isError) setImmediate(() => void continueFromMessage(body).catch(e => hostFailures.push(e.message)));
+        if (!isError && collectMessages) setImmediate(() => void continueFromMessage(body).catch(e => hostFailures.push(e.message)));
         return;
       }
       if (req.url === "/tool") {
@@ -148,18 +148,22 @@ test("official AppBridge opaque sandbox: completed result, real swipes, exact lo
     await page.reload();await page.waitForFunction(()=>window.ready);frame=page.frames().find(f=>f.url().endsWith('/view'));
     await page.evaluate(()=>window.test.send());await frame.locator('.gm-card').waitFor();
   };
-  lossMode=true;await reopen();
+  lossMode=true;collectMessages=false;await reopen();
   await frame.locator('.gm-yes').click();await frame.getByRole('button',{name:'Send answers',exact:true}).click();
   try { await frame.getByText('Another submission won this round.',{exact:false}).waitFor({timeout:5000}); }
   catch(e){t.diagnostic(JSON.stringify({stage:'competing-winner',lossMode,calls:calls.slice(-6).map(c=>({name:c.name,round:c.arguments?.round})),state:await frame.locator('#status').textContent(),errors}));throw e;}
-  assert.equal(messages.length,acceptedMessages,'loser never claims own delivery or sends follow-up');
+  for(let n=0;messages.length===acceptedMessages&&n<100;n++)await new Promise(r=>setTimeout(r,10));
+  assert.equal(messages.length,acceptedMessages+1,'loser may request collection of the actual server-confirmed winner, never its losing intent');
+  const winning=(await call('grill_ui_state',{link})).structuredContent.snapshot;
+  assert.ok(messages.at(-1).content[0].text.includes(winning.submissionId));
+  assert.ok(!messages.at(-1).content[0].text.includes(calls.filter(c=>c.name==='grill_ui_submit').at(-1).arguments.submissionId));
   assert.match((await call('grill_wait',{link,round:1,seconds:1})).structuredContent.answers,/Different winning ciphertext/);
   await call('grill_cancel',{link});await frame.getByText('This grill was cancelled.').waitFor();
   noMessage=true;await reopen();
   await frame.locator('.gm-yes').click();await frame.getByRole('button',{name:'Send answers',exact:true}).click();
   await frame.getByText('Sent. This host cannot request an automatic follow-up here.',{exact:false}).waitFor();
   assert.equal((await call('grill_ui_state',{link})).structuredContent.snapshot.state,'answered');
-  assert.equal(messages.length,acceptedMessages);assert.equal(await frame.getByRole('button',{name:'Retry',exact:true}).isVisible(),true);
+  assert.equal(messages.length,acceptedMessages+1);assert.equal(await frame.getByRole('button',{name:'Retry',exact:true}).isVisible(),true);
   await call('grill_cancel',{link});await frame.getByText('This grill was cancelled.').waitFor();
   assert.deepEqual(errors,[]);
   assert.ok(!requests.some(r=>r.frame.endsWith('/view') && !r.url.endsWith('/view')),"sandbox makes no direct API/module requests");

@@ -1,12 +1,12 @@
 import { App } from "@modelcontextprotocol/ext-apps";
 import { mountGrill } from "../../ui/src/grill.js";
 import { parseSessionLink, openRound, sealRoundAnswers } from "../../core/src/session.js";
-import { newId } from "../../core/src/crypto.js";
+import { newId, isId } from "../../core/src/crypto.js";
 
 const app = new App({ name: "Grill Me", version: "0.2.0" }, { availableDisplayModes: ["inline", "fullscreen"] }, { autoResize: false });
 const $ = id => document.getElementById(id);
 let ids, link, started = false, alive = true, generation = 0, revision = -1, round = 0;
-let ui, grill, draft, intent, confirmed = false, notifyingIntent, notified = false, retryAction;
+let ui, grill, draft, intent, confirmed = false, notice, notifyingNotice, retryAction;
 let pollController;
 let lostRound = 0; // current-only loss notice; never misrepresent another winner as ours
 function retire() {
@@ -20,7 +20,7 @@ function retry(fn) { retryAction = fn; $("retry").hidden = !fn; }
 $("retry").onclick = () => { const fn = retryAction; retry(null); if (fn) void fn(); };
 function end(reason) {
   if (!alive) return; alive = false; generation++; pollController?.abort();
-  ids = link = grill = draft = intent = null; lostRound = 0; retry(null);
+  ids = link = grill = draft = intent = notice = null; lostRound = 0; retry(null);
   message({ finished: "All done—your agent has finished this grill.", cancelled: "This grill was cancelled.", expired: "This session expired." }[reason] ?? "Session ended or expired.");
 }
 async function tool(name, args, signal) {
@@ -28,25 +28,37 @@ async function tool(name, args, signal) {
   if (result.isError || !result.structuredContent) throw new Error("unavailable");
   return result.structuredContent;
 }
+function winningNotice(winner) {
+  // Only authenticated relay results call this. Notification identity is the actual
+  // winner, not this view's (possibly losing) encrypted submission intent.
+  if (winner.round !== round || !isId(winner.submissionId)) throw new Error("Invalid winner.");
+  if (notice?.round !== winner.round || notice.submissionId !== winner.submissionId)
+    notice = { round: winner.round, submissionId: winner.submissionId, notified: false };
+}
+function deliveryLabel() {
+  if (lostRound === round) return "Another submission won this round. Your answers were not delivered.";
+  if (confirmed && intent?.submissionId === notice?.submissionId) return "Sent.";
+  return "This round was submitted from another view.";
+}
 async function notify() {
-  if (!alive || !confirmed || notified || notifyingIntent === intent || !intent) return;
-  const g = generation, saved = intent;
+  if (!alive || !notice || notice.notified || notifyingNotice === notice) return;
+  const g = generation, saved = notice;
   if (!app.getHostCapabilities()?.message?.text) {
-    message("Sent. This host cannot request an automatic follow-up here. Your answers remain safe for your agent to collect."); retry(notify); return;
+    message(deliveryLabel() + " This host cannot request an automatic follow-up here. The submitted answers remain safe for your agent to collect."); retry(notify); return;
   }
-  notifyingIntent = saved;
+  notifyingNotice = saved;
   try {
     // Metadata only. The model already owns the private link; never include its key,
     // questions, answers or a replacement ACK in this user-origin follow-up.
-    const result = await app.sendMessage({ role: "user", content: [{ type: "text", text: `Grill Me answers submitted for session ${ids.id}, round ${saved.round}, submission ${saved.submissionId}. Use the saved private interview link to grill_wait, read and retain the actual answers, then ACK its exact receipt and continue the Matt frontier on the SAME view. Finish only after shared-understanding confirmation. This notification is not an ACK.` }] }, { timeout: 15_000 });
+    const result = await app.sendMessage({ role: "user", content: [{ type: "text", text: `Grill Me answers available for session ${ids.id}, round ${saved.round}, submission ${saved.submissionId}: the server-confirmed winning submission, possibly from the phone or another view. Use the saved private interview link to grill_wait ONCE with seconds:1, read and retain the actual winning answers, then ACK its exact receipt and continue the Matt frontier on the SAME view. After publishing, end your turn for the next input. Finish only after shared-understanding confirmation. This notification is not an ACK or a claim that this view submitted the answers.` }] }, { timeout: 15_000 });
     if (result.isError) throw new Error("rejected");
-    if (!alive || g !== generation || saved !== intent) return;
-    notified = true; retry(null);
+    if (!alive || g !== generation || saved !== notice) return;
+    saved.notified = true; retry(null);
   } catch {
-    if (alive && g === generation && saved === intent) {
-      message("Sent. The host follow-up was not confirmed. Retry the follow-up; your answers have not been cleared."); retry(notify);
+    if (alive && g === generation && saved === notice) {
+      message(deliveryLabel() + " The host follow-up was not confirmed. Retry the follow-up; the submitted answers have not been cleared."); retry(notify);
     }
-  } finally { if (notifyingIntent === saved) notifyingIntent = null; }
+  } finally { if (notifyingNotice === saved) notifyingNotice = null; }
 }
 async function submitIntent() {
   const saved = intent, g = generation;
@@ -60,8 +72,9 @@ async function submitIntent() {
   }
   generation++; // retired onChange/swipe callbacks cannot recreate purged plaintext
   confirmed = true; grill = draft = null; retry(null);
+  winningNotice(result);
   message("Sent. Waiting for your agent to pick up your answers.");
-  await notify();
+  void notify(); // host message latency must not block current-state polling
 }
 async function send(answers) {
   const g = generation;
@@ -81,7 +94,7 @@ async function accept(snapshot) {
   if (snapshot.state === "pending") {
     generation++; const g = generation; retire();
     if (oldRound !== round) draft = null;
-    intent = null; lostRound = 0; confirmed = notified = false; retry(null);
+    intent = notice = null; lostRound = 0; confirmed = false; retry(null);
     const decoded = await openRound(snapshot, { ...ids, round });
     if (!alive || g !== generation) return;
     grill = decoded; $("status").hidden = true; $("cards").hidden = false;
@@ -95,8 +108,10 @@ async function accept(snapshot) {
     } else { if (intent?.round === round) lostRound = round; generation++; grill = draft = intent = null; message(lostRound === round
       ? "Another submission won this round. Your answers were not delivered. Waiting for your agent."
       : "This round was submitted from another view. Waiting for your agent to collect it."); }
+    winningNotice(snapshot);
+    void notify();
   } else if (snapshot.state === "idle") {
-    generation++; intent = grill = draft = null; lostRound = 0; confirmed = notified = false; retry(null);
+    generation++; intent = grill = draft = notice = null; lostRound = 0; confirmed = false; retry(null);
     message("Your agent is thinking. Your next questions will appear here automatically.");
   }
 }

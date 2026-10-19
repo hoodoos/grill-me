@@ -34,14 +34,37 @@ unsubmitted draft does not survive destruction of the iframe. Same-revision snap
 preserve the draft, and asynchronous work is generation-guarded with retired mount nodes.
 The exact sealed submission intent is retained for uncertain POST retries, never resealed.
 
-Only after authenticated submission success, a host supporting `message.text` receives
+After authenticated submission success, or when its authenticated current-state poll
+observes an `answered` snapshot from the phone/another view, a host supporting `message.text` receives
 `ui/message` with a text-content ARRAY containing fixed continuation instructions and
 round/submission metadata, no key/questions/answers. Rejection (including resolved
 `isError:true`) remains retryable. Acceptance is NOT model receipt or ACK. Lost replies
 can produce at-least-once follow-ups; per-view intent deduplication and relay CAS protect
 rounds, not a claim of globally exactly-once model processing. The agent still waits,
 reads/retains, explicitly ACKs the original receipt, and publishes the next frontier.
-Choose UI follow-up for in-chat and native events for phone to avoid gratuitous wakes.
+The notice identifies the actual server-confirmed winning round/submission, independently
+of the view's own sealed submit intent. Own-submit success and its snapshot share that
+notice. A losing view keeps its explicit non-delivery copy; it may request collection
+of the actual winner, never claim its losing answers were delivered. The current-only
+notice is purged on ACK/advance/end; no round history is introduced. Host message latency
+does not block the state poll, and a late response cannot suppress a newer round's notice.
+After rendering the first inline view, the agent ends its turn instead of blocking in
+`grill_wait`. A submitted-answers UI follow-up gets one `grill_wait({seconds:1})` read;
+after read/retain/ACK and the next publish it yields again, keeping the same view.
+Unexpected `WAITING` does not authorize an inline polling loop, ACK or replacement round.
+Phone polling is a separate active-turn path. Automatic phone wake requires a host that
+supports it and a successfully registered subscription; advertising events does not
+establish one. Neither a queued UI message nor an absent subscription proves that a
+provider will resume the model. This workflow correction does not establish actual
+provider scheduling, iframe lifetime or model adherence.
+
+This phone-to-host bridge requires the inline view to remain alive and expose
+`message.text`. A closed view or unsupported host still needs an actual registered
+host wake; this is not a durable subscription by itself. Already-open older resource
+versions do not gain this bridge after a server upgrade. Refresh the connector's tool
+catalog/resource and reopen the SAME saved interview view only if the old view is gone
+or has no unsubmitted draft. Never allocate a replacement session to recover uncollected
+answers, or discard a partial draft merely to refresh the view.
 
 Actual `ui/initialize` capabilities determine bridge/message/display-mode support.
 Both fixed container height and maxHeight are honored; the unchanged560px card remains
