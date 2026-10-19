@@ -106,6 +106,9 @@ A committed ack with lost response replays the encrypted local cache without req
 exact ack retry clears only that round. After confirmed ack, retain only idle id/key/currentidentity,
 not prior round plaintext. Finish refuses any unconfirmed publication/answer cache. Per-id serialized
 mutations and version-aware local writes prevent stale async cleanup from clobbering the next round.
+This protection covers independent CLI/MCP processes sharing a state home, not only a process-local
+Promise map: use an interprocess mutation lock and/or atomic version/file conflict detection. Persist
+the original acknowledgement expectedRevision and submissionId for exact retries after a lost reply.
 All bounded MCP paths include sleeps/fetch/body/output/ack in their original deadline/signal. Unbounded
 CLI polling remains supported. Output does not block on cleanup; next send resolves ack recovery first.
 
