@@ -59,3 +59,8 @@ Call `grill_wait` with the `id`. It waits for the answers and returns a status:
 ## 4. If the user answers in the chat first
 
 Call `grill_cancel` with the `id` and carry on with what they said.
+
+## Credit
+
+Question format adapted from [Matt Pocock’s grilling skill](https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling),
+MIT licensed. Phone delivery and this client workflow are Grill Me adaptations.

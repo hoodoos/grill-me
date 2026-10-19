@@ -29,6 +29,17 @@
     <li>The answers land in the agent's session within a second, end-to-end encrypted.</li>
   </ol>
 
+  <h2>Privacy</h2>
+  <p>With the CLI, plugins and local MCP, questions and answers are encrypted on your devices
+    before upload. The encryption key is in the part of the link after <code>#</code>, which
+    browsers do not send to the server. The server stores encrypted content.</p>
+  <p>Treat the full link as private: anyone who has it can read and answer that grill.
+    The agent deletes the server copy after collecting the answers. Otherwise, it expires
+    one hour after creation, or one hour after answers are submitted.</p>
+  <p>Your browser keeps the key, readable questions and answer progress locally so you can
+    reload or resume. Clear this site's browser data to remove those local copies. Your
+    agent and its provider can also see the questions and returned answers in your session.</p>
+
   <div class="cta">
     <a class="primary" href="/demo">Try the demo</a>
     <a href="https://github.com/hoodoos/grill-me">GitHub</a>
@@ -37,6 +48,10 @@
   <h2>For your agent</h2>
   <p>Built for claude.ai, the Claude apps, Claude Code and Codex. The <code>npx grill-me-ai</code>
     CLI, the Claude Code plugin and the MCP setup are coming soon — the demo above works today.</p>
+  <h2>Credits</h2>
+  <p>The question format is adapted from
+    <a href="https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling">Matt Pocock's grilling skill</a>.
+    Grill Me adds the phone swipe UI and encrypted delivery.</p>
 </main>
 </body>
 </html>

@@ -86,6 +86,12 @@ server. The server stores only encrypted data, and deletes a grill once it's ans
 about an hour if it isn't. The details, and how hosted mode differs, are in
 [SPEC.md](SPEC.md).
 
+## Credits
+
+The question format is adapted from [Matt Pocock’s grilling skill](https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling).
+Grill Me adds the phone swipe UI and encrypted question-and-answer delivery. The bundled skills
+are adaptations, rather than a dependency on the complete upstream interview workflow.
+
 ## Development
 
 Node 22+, no build step. `npm test` runs everything. [SPEC.md](SPEC.md) is the source of truth.

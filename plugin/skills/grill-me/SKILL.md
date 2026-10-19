@@ -76,3 +76,8 @@ Stop the background wait and run `npx -y grill-me-ai cancel <id>`.
 
 No background commands there: use the MCP tools `grill_send` and `grill_wait` if they are available,
 with the same format and status mapping.
+
+## Credit
+
+Question format adapted from [Matt Pocock’s grilling skill](https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling),
+MIT licensed. Phone delivery and this client workflow are Grill Me adaptations.
