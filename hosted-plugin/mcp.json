@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "grill-me-game": {
+      "type": "streamable-http",
+      "url": "https://grill-me.ai/mcp"
+    }
+  }
+}

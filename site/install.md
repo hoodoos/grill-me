@@ -14,7 +14,7 @@ https://grill-me.ai/mcp
 
 Claude: open Customize (or Settings) > Connectors > Add custom connector. Enter the URL and choose No sign in. Enable it in the conversation. Remote connectors run through Claude's cloud, including web, Desktop and mobile; account/workspace policies apply.
 
-ChatGPT web: open Plugins > plus > Add custom MCP server. Enter the URL, choose No authentication, review the warning, then Create as a plugin. Install the personal plugin, open a new Work chat and select it with @. Availability depends on your account and workspace policies. This is not a promise of ChatGPT mobile or desktop support.
+ChatGPT web: open Plugins > plus > Add custom MCP server. Name it Grill-me Game, choose Connection: Server URL, enter https://grill-me.ai/mcp and choose No authentication. Review the warning, then Create as a plugin. Install the personal plugin, open a new Work chat and select it with @. Availability depends on your account and workspace policies. This is not a promise of ChatGPT mobile or desktop support.
 
 Once connected, ask it to grill you. Keep the phone link open; each next round appears there automatically.
 Supporting MCP Apps hosts can also show the swipe cards inside the conversation; Grok inline rendering is unverified.

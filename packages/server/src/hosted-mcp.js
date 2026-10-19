@@ -8,6 +8,7 @@ import { GRILL_SCHEMA } from "../../core/src/format.js";
 import { MODERN, modernRequest, modernResult } from "./mcp-modern.js";
 import { EVENT_NAME } from "./answer-events.js";
 import { appResource } from "./mcp-app-resource.js";
+import { hostedServerInfo, HOSTED_TOOL_TITLES } from "./hosted-brand.js";
 
 const ORIGIN = "https://grill-me.ai";
 const ORIGINS = new Set([ORIGIN, "https://claude.ai", "https://chatgpt.com"]);
@@ -37,7 +38,7 @@ const CONTEXT_RECEIPT = { type: "object", additionalProperties: false, propertie
 const HOSTED_GRILL_SCHEMA = structuredClone(GRILL_SCHEMA);
 HOSTED_GRILL_SCHEMA.properties.questions.items.required = ["title", "recommend"];
 HOSTED_GRILL_SCHEMA.properties.questions.items.properties.recommend.description = "Required recommended answer: include why and/or the advised choice. Word the question so yes accepts it.";
-const def = (name, description, properties, required, extra = {}) => ({ name, title: name.replaceAll("_", " "), description,
+const def = (name, description, properties, required, extra = {}) => ({ name, title: HOSTED_TOOL_TITLES[name], description,
   inputSchema: { type: "object", properties, required, additionalProperties: false }, annotations: { ...annotations, ...extra }, _meta: { ui: { visibility: ["model"] } } });
 const TOOLS = [
   def("grill_start", "Start EVERY new Grill Me interview here, BEFORE drafting questions. The result includes the complete Matt Pocock grilling skill; read and follow it, not just the transport instructions. Map a design tree, ask only the whole settled-prerequisite frontier, number questions and give each a recommended answer so yes accepts it. Look up facts yourself; ask the user for decisions. Recompute after answers; stop only after an empty frontier and confirmed shared understanding. This allocates a private link only; retain it for every round. Lost start reply publishes nothing.", {}, [], { readOnlyHint: true, idempotentHint: false }),
@@ -322,7 +323,7 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
         typeof params.clientInfo.version !== "string" || !params.clientInfo.version || params.clientInfo.version.length > 100)
         return reply(200, rpcError(id, -32602, "Invalid initialization parameters"));
       return reply(200, response(id, { protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : VERSIONS[0],
-        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS + "\n\n" + CONTINUATION }));
+        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } }, serverInfo: hostedServerInfo(version), instructions: HOSTED_INSTRUCTIONS + "\n\n" + CONTINUATION }));
     }
     if (method === "ping") return reply(200, response(id, {}));
     if (method === "tools/list") return reply(200, response(id, { tools: TOOLS, ...(modern ? { cacheScope: "public", ttlMs: 300_000 } : {}) }));

@@ -64,7 +64,7 @@ test("actual modern HTTP envelopes/headers/discovery coexist with legacy initial
   const discover = await f.rpc("server/discover"); assert.equal(discover.status, 200);
   for (const k of ["cacheScope", "capabilities", "resultType", "supportedVersions", "ttlMs"]) assert.ok(Object.hasOwn(discover.body.result, k));
   assert.equal(discover.body.result.resultType, "complete"); assert.ok(discover.body.result.capabilities.events);
-  assert.equal(discover.body.result._meta[prefix + "serverInfo"].name, "grill-me-hosted");
+  assert.equal(discover.body.result._meta[prefix + "serverInfo"].name, "grill-me-game");
   const tools = (await f.rpc("tools/list")).body.result;
   assert.equal(tools.cacheScope, "public"); assert.equal(tools.resultType, "complete"); assert.equal(tools.tools.length, 11);
   const init = await f.rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "legacy", version: "1" } }, false);

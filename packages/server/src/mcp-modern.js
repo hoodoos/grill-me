@@ -1,4 +1,5 @@
 // MCP2.0 is per request, never selected by a remembered connection/handshake.
+import { hostedServerInfo } from "./hosted-brand.js";
 export const MODERN = "2026-07-28";
 const PREFIX = "io.modelcontextprotocol/";
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -24,4 +25,4 @@ export function modernRequest(req, message, supported) {
   if (bodyVersion !== MODERN) return error(-32022, "Unsupported protocol version", { supported, requested: bodyVersion });
   return { modern: true };
 }
-export const modernResult = (result, version) => ({ ...result, resultType: "complete", _meta: { ...result._meta, [PREFIX + "serverInfo"]: { name: "grill-me-hosted", version } } });
+export const modernResult = (result, version) => ({ ...result, resultType: "complete", _meta: { ...result._meta, [PREFIX + "serverInfo"]: hostedServerInfo(version) } });
