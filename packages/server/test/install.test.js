@@ -93,6 +93,9 @@ test("/ with content negotiation: body, content type and Vary", async () => {
       } else {
         assert.match(r.headers["content-type"], /^text\/html/, label);
         assert.match(r.body, /<!doctype html>/i, label);
+        assert.equal(r.headers["x-content-type-options"], "nosniff", label);
+        assert.match(r.headers["content-security-policy"], /script-src 'self'; style-src 'self'/, label);
+        assert.match(r.headers["content-security-policy"], /frame-ancestors 'none'/, label);
       }
     }
   } finally {
@@ -138,11 +141,12 @@ test("the homepage carries the guide verbatim", async () => {
     assert.equal(r.status, 200);
     const html = r.body;
     assert.ok(
-      html.includes("Paste this to your agent: Install Grill Me from https://grill-me.ai/install"),
-      "the paste-this line, verbatim",
+      html.includes('id="install-prompt" tabindex="0">Install Grill Me from https://grill-me.ai/</code>'),
+      "the owner's copy-to-install prompt, verbatim",
     );
     assert.ok(html.includes('<link rel="alternate" type="text/markdown" href="/install">'), "rel=alternate");
-    assert.ok(!html.toLowerCase().includes("<script"), "no inline script");
+    assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), "no inline script");
+    assert.match(html, /<script type="module" src="\/home-demo\.js\?v=[^"]+"><\/script>/);
 
     // Every command line from site/install.md's fenced blocks is inside a <pre><code> exactly once.
     const md = await readFile(INSTALL_MD, "utf8");
