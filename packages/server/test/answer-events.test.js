@@ -66,12 +66,12 @@ test("actual modern HTTP envelopes/headers/discovery coexist with legacy initial
   assert.equal(discover.body.result.resultType, "complete"); assert.ok(discover.body.result.capabilities.events);
   assert.equal(discover.body.result._meta[prefix + "serverInfo"].name, "grill-me-hosted");
   const tools = (await f.rpc("tools/list")).body.result;
-  assert.equal(tools.cacheScope, "public"); assert.equal(tools.resultType, "complete"); assert.equal(tools.tools.length, 8);
+  assert.equal(tools.cacheScope, "public"); assert.equal(tools.resultType, "complete"); assert.equal(tools.tools.length, 11);
   const init = await f.rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "legacy", version: "1" } }, false);
   assert.equal(init.body.result.protocolVersion, "2025-11-25"); assert.equal(init.body.result.resultType, undefined);
   assert.equal((await f.rpc("ping", {}, false)).status, 200);
   assert.equal((await f.rpc("ping")).status, 404, "modern protocol removed legacy ping");
-  assert.equal((await f.rpc("tools/list", {}, false)).body.result.tools.length, 8);
+  assert.equal((await f.rpc("tools/list", {}, false)).body.result.tools.length, 11);
   for (const [params, h, code] of [
     [{}, { "mcp-method": "private_sentinel" }, -32020],
     [{ _meta: { [prefix + "clientCapabilities"]: null } }, {}, -32602],
@@ -305,4 +305,16 @@ test("a guessed-id preparation cannot reserve the real owner's subscription afte
   await f.send(cap.link);
   assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM event_subscriptions").get().n, 0);
   const owner = await f.subscribe(cap.link); assert.ok(owner.body.result.id);
+});
+
+test("unsubscribe/resubscribe keeps the SAME current winning event ID and exact body, no round history", async t => {
+  const f = await fixture(t), cap = await f.start(); await f.send(cap.link); await f.subscribe(cap.link);
+  await f.postAnswer(await f.blob(cap.link)); await until(() => f.received.some(r => r.data.name));
+  const first = f.received.find(r => r.data.name);
+  await f.subscribe(cap.link, {}, "events/unsubscribe"); f.advance(1000); await f.subscribe(cap.link);
+  await until(() => f.received.filter(r => r.data.name).length === 2);
+  const second = f.received.filter(r => r.data.name)[1]; assert.equal(second.body, first.body); assert.equal(second.headers["webhook-id"], first.headers["webhook-id"]);
+  const received = (await f.call("grill_wait", { link: cap.link, round: 1, seconds: 1 })).structuredContent;
+  await f.call("grill_ack", { link: cap.link, receipt: received.receipt });
+  assert.equal(f.inspect.prepare("SELECT ans_at FROM sessions").get().ans_at, null);
 });

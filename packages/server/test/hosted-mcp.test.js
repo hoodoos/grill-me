@@ -50,7 +50,7 @@ test("hosted instructions, independent legacy and continuation schemas and stric
   for (const word of ["grill_start", "grill_wait", "grill_ack", "receiving"]) assert.ok(init.result.instructions.slice(0, 512).includes(word));
   assert.ok(init.result.instructions.includes(await fs.readFile(new URL("../../core/src/grilling.md", import.meta.url), "utf8")));
   const tools = (await (await f.rpc("tools/list")).json()).result.tools;
-  assert.deepEqual(tools.map(t => t.name), ["grill_start", "grill_send", "grill_wait", "grill_ack", "grill_finish", "grill_cancel", "grill_subscribe", "grill_unsubscribe"]);
+  assert.deepEqual(tools.map(t => t.name), ["grill_start", "grill_send", "grill_wait", "grill_ack", "grill_finish", "grill_cancel", "grill_subscribe", "grill_unsubscribe", "grill_show", "grill_ui_state", "grill_ui_submit"]);
   assert.equal(tools.find(t => t.name === "grill_wait").annotations.readOnlyHint, true);
   assert.equal(tools.find(t => t.name === "grill_start").annotations.readOnlyHint, true);
   const skill = await fs.readFile(new URL("../../core/src/grilling.md", import.meta.url), "utf8");

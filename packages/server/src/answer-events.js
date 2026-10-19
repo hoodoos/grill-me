@@ -87,7 +87,7 @@ export function createAnswerEvents({ dbh, db, now, stat, options = {} }) {
     if (!sub || sub.expires_at <= now() || !safeEqual(sub.auth_hash, row.write_hash)) return;
     const eventId = "evt_" + crypto.createHmac("sha256", key).update(JSON.stringify([sub.id, row.id, row.round, row.revision, row.sub_id])).digest("base64url").slice(0, 32);
     dbh.prepare(`INSERT OR IGNORE INTO event_outbox(event_id,subscription_id,session_id,round,revision,submission_id,occurred_at,expires_at,next_at)
-      VALUES(?,?,?,?,?,?,?,?,?)`).run(eventId, sub.id, row.id, row.round, row.revision, row.sub_id, now(), Math.min(sub.expires_at, row.expires_at), now());
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(eventId, sub.id, row.id, row.round, row.revision, row.sub_id, row.ans_at, Math.min(sub.expires_at, row.expires_at), now());
   };
   const bind = row => {
     const prepared = get.get(row.id);

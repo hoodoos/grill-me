@@ -117,6 +117,10 @@ export function createServer(options = {}) {
     id TEXT PRIMARY KEY, reason TEXT NOT NULL CHECK(reason IN ('finished','cancelled','expired')),
     expires_at INTEGER NOT NULL)`);
   dbh.exec("CREATE INDEX IF NOT EXISTS session_terminals_expiry ON session_terminals(expires_at)");
+  // Current answer occurrence only, cleared on ACK/advance. Existing pre-events answers
+  // have no recorded occurrence; their first observed ready time becomes stable here.
+  if (!dbh.prepare("PRAGMA table_info(sessions)").all().some(c => c.name === "ans_at")) dbh.exec("ALTER TABLE sessions ADD COLUMN ans_at INTEGER");
+  dbh.prepare("UPDATE sessions SET ans_at=? WHERE state='answered' AND ans_at IS NULL").run(now());
   dbh.exec(`CREATE TABLE IF NOT EXISTS stats(
     day TEXT NOT NULL, name TEXT NOT NULL, bucket TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL,
     PRIMARY KEY (day, name, bucket))`);
@@ -138,11 +142,11 @@ export function createServer(options = {}) {
   // Every state write is a conditional single-winner UPDATE: current state, exact revision,
   // live expiry and the authenticated hash, rechecked synchronously after async auth.
   const qSessionPublish = dbh.prepare(`UPDATE sessions SET round = ?, revision = revision + 1, state = 'pending', ct = ?, iv = ?, op_id = ?, op_digest = ?, op_rev = ?,
-    ans_ct = NULL, ans_iv = NULL, sub_id = NULL, sub_digest = NULL, sub_rev = NULL, expires_at = ?
+    ans_ct = NULL, ans_iv = NULL, ans_at = NULL, sub_id = NULL, sub_digest = NULL, sub_rev = NULL, expires_at = ?
     WHERE id = ? AND state = 'idle' AND revision = ? AND revision < 2147483647 AND round = ? AND expires_at > ? AND write_hash = ?`);
-  const qSessionAnswer = dbh.prepare(`UPDATE sessions SET state = 'answered', revision = revision + 1, ans_ct = ?, ans_iv = ?, sub_id = ?, sub_digest = ?, sub_rev = ?, expires_at = ?
+  const qSessionAnswer = dbh.prepare(`UPDATE sessions SET state = 'answered', revision = revision + 1, ans_ct = ?, ans_iv = ?, sub_id = ?, sub_digest = ?, sub_rev = ?, expires_at = ?, ans_at = ?
     WHERE id = ? AND state = 'pending' AND revision = ? AND revision < 2147483647 AND round = ? AND expires_at > ? AND write_hash = ?`);
-  const qSessionAck = dbh.prepare(`UPDATE sessions SET state = 'idle', revision = revision + 1, ct = NULL, iv = NULL, ans_ct = NULL, ans_iv = NULL, expires_at = ?
+  const qSessionAck = dbh.prepare(`UPDATE sessions SET state = 'idle', revision = revision + 1, ct = NULL, iv = NULL, ans_ct = NULL, ans_iv = NULL, ans_at = NULL, expires_at = ?
     WHERE id = ? AND state = 'answered' AND revision = ? AND revision < 2147483647 AND round = ? AND sub_id = ? AND expires_at > ? AND write_hash = ?`);
   const qSessionFinish = dbh.prepare("DELETE FROM sessions WHERE id = ? AND state = 'idle' AND revision = ? AND expires_at > ? AND write_hash = ?");
   const qSessionDelete = dbh.prepare("DELETE FROM sessions WHERE id = ?");
@@ -798,7 +802,7 @@ export function createServer(options = {}) {
     const digest = blobDigest(ct, iv);
     const t = now();
     const wonAnswer = answerEvents.transaction(() => {
-      const won = qSessionAnswer.run(ct, iv, submissionId, digest, expectedRevision, t + ttlMs, id, expectedRevision, round, t, row.write_hash).changes;
+      const won = qSessionAnswer.run(ct, iv, submissionId, digest, expectedRevision, t + ttlMs, t, id, expectedRevision, round, t, row.write_hash).changes;
       if (won) answerEvents.enqueue(qSessionGet.get(id));
       return won;
     });
@@ -946,15 +950,17 @@ export function createServer(options = {}) {
     const abort = () => { if (done) return; done = true; cleanup(); reject(new Error("aborted")); };
     signal.addEventListener("abort", abort, { once: true });
     const run = async () => {
-      if (operation === "snapshot" || operation === "answers") {
+      if (["snapshot", "state", "answers"].includes(operation)) {
         const row = liveSession(id);
         if (!row) return sessionGone(res, id);
         if (!tokenEq(row.write_hash, keys.writeHash)) return sendEmpty(res, 403);
         if (operation === "snapshot") return getSession(req, res, id, new URL("http://internal/?wait=0"));
+        if (operation === "state") return getSession(req, res, id, new URL(`http://internal/?wait=${wait}&after=${body.afterRevision}`));
         return getRoundAnswers(req, res, id, round, new URL(`http://internal/?wait=${wait}`));
       }
       if (operation === "create") return postSession(req, res);
       if (operation === "publish") return postRound(req, res, id);
+      if (operation === "answer") return postRoundAnswers(req, res, id, round);
       if (operation === "ack") return postAck(req, res, id, round);
       if (operation === "finish") return postFinish(req, res, id);
       if (operation === "cancel") return deleteSession(req, res, id);

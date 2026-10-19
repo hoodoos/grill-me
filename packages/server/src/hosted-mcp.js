@@ -7,6 +7,7 @@ import { parseSessionLink, makeSessionLink, sealRound, openRound, openRoundAnswe
 import { GRILL_SCHEMA } from "../../core/src/format.js";
 import { MODERN, modernRequest, modernResult } from "./mcp-modern.js";
 import { EVENT_NAME } from "./answer-events.js";
+import { appResource } from "./mcp-app-resource.js";
 
 const ORIGIN = "https://grill-me.ai";
 const ORIGINS = new Set([ORIGIN, "https://claude.ai", "https://chatgpt.com"]);
@@ -34,7 +35,7 @@ const HOSTED_GRILL_SCHEMA = structuredClone(GRILL_SCHEMA);
 HOSTED_GRILL_SCHEMA.properties.questions.items.required = ["title", "recommend"];
 HOSTED_GRILL_SCHEMA.properties.questions.items.properties.recommend.description = "Required recommended answer: include why and/or the advised choice. Word the question so yes accepts it.";
 const def = (name, description, properties, required, extra = {}) => ({ name, title: name.replaceAll("_", " "), description,
-  inputSchema: { type: "object", properties, required, additionalProperties: false }, annotations: { ...annotations, ...extra } });
+  inputSchema: { type: "object", properties, required, additionalProperties: false }, annotations: { ...annotations, ...extra }, _meta: { ui: { visibility: ["model"] } } });
 const TOOLS = [
   def("grill_start", "Start EVERY new Grill Me interview here, BEFORE drafting questions. The result includes the complete Matt Pocock grilling skill; read and follow it, not just the transport instructions. Map a design tree, ask only the whole settled-prerequisite frontier, number questions and give each a recommended answer so yes accepts it. Look up facts yourself; ask the user for decisions. Recompute after answers; stop only after an empty frontier and confirmed shared understanding. This allocates a private link only; retain it for every round. Lost start reply publishes nothing.", {}, [], { readOnlyHint: true, idempotentHint: false }),
   def("grill_send", "Publish ONLY the current whole frontier after reading the full skill returned by grill_start. Prefer text in Matt's exact format: ❓ **Q1** - **Title**: body, then ➡️ recommended answer; separate numbered questions with ---. Every question needs a recommendation and yes must accept it. Keep dependent questions for later rounds. Structured grill is allowed with equivalent recommendations. Use saved link, explicit round and idle expectedRevision (0 first). Pass exactly one of grill or text. Show ALL questions in that format in chat, then Grill it on your phone plus link. Retry uncertain writes with EXACT saved arguments; never replace pending/uncollected content.", {
@@ -62,6 +63,14 @@ const TOOLS = [
     link: linkField, url: field("The exact previously configured callback URL."),
   }, ["link", "url"]),
 ];
+const resource = appResource();
+const showTool = def("grill_show", "Display the current interview as interactive swipe cards inside a host that supports MCP Apps. Call AFTER publishing, with the saved private link. This separate render tool does not publish or collect. Keep this view for subsequent rounds; do not call again to refresh it. Unsupported hosts use the SAME phone link from grill_send. In-chat Send requests a host follow-up; read/retain with grill_wait, ACK explicitly and publish next frontier. Use UI follow-up for in-chat, native events for phone; duplicate wakeups never authorize duplicate rounds.", { link: linkField }, ["link"], { readOnlyHint: true });
+showTool._meta.ui.resourceUri = resource.uri;
+TOOLS.push(showTool);
+for (const tool of [
+  def("grill_ui_state", "App-only encrypted current-round snapshot/long wait. Never collects or acknowledges answers.", { link: linkField, afterRevision: field("Last observed revision", "integer"), seconds: field("Wait budget, max25", "integer") }, ["link"], { readOnlyHint: true }),
+  def("grill_ui_submit", "App-only exact encrypted submission. Retry the SAME submission ID, revision and ciphertext after uncertain delivery. No ACK.", { link: linkField, round: field("Current round", "integer"), expectedRevision: field("Pending revision", "integer"), submissionId: field("Saved unique submission ID"), ct: field("Encrypted answers"), iv: field("AES-GCM nonce") }, ["link", "round", "expectedRevision", "submissionId", "ct", "iv"]),
+]) { tool._meta.ui.visibility = ["app"]; TOOLS.push(tool); }
 const safeMessages = {
   INPUT: "Invalid tool arguments. Use the advertised schema; retain the same private link and explicit round.",
   WORKFLOW: "Every frontier question needs a recommended answer so yes accepts it. Follow the full skill returned by grill_start; prefer its original numbered question and ➡️ recommendation text format. Retry with the same link and round.",
@@ -89,6 +98,8 @@ function validateArgs(tool, a) {
   if (a.round !== undefined && !validateRound(a.round)) fail("INPUT");
   if (a.expectedRevision !== undefined && (!Number.isInteger(a.expectedRevision) || a.expectedRevision < 0 || a.expectedRevision > 2147483647)) fail("INPUT");
   if (a.seconds !== undefined && (!Number.isInteger(a.seconds) || a.seconds < 1 || a.seconds > 50)) fail("INPUT");
+  if (tool.name === "grill_ui_state" && (a.seconds > 25 || a.afterRevision !== undefined && (!Number.isInteger(a.afterRevision) || a.afterRevision < 0 || a.afterRevision > 2147483647))) fail("INPUT");
+  if (tool.name === "grill_ui_submit" && (!isId(a.submissionId) || typeof a.ct !== "string" || a.ct.length > 11000 || typeof a.iv !== "string" || a.iv.length > 32)) fail("INPUT");
   if (tool.name === "grill_send" && (a.round === 1 ? a.expectedRevision !== 0 : a.expectedRevision < 1)) fail("INPUT");
   if (tool.name === "grill_finish" && a.expectedRevision < 1) fail("INPUT");
   if (a.receipt !== undefined && (!object(a.receipt) || Object.keys(a.receipt).sort().join() !== "expectedRevision,round,submissionId" ||
@@ -122,6 +133,7 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
   const maxCreates = limits.creates ?? 600, maxWaits = limits.waits ?? 200, maxConversation = limits.conversation ?? 30;
   const creates = new Map(), conversations = new Map(), controllers = new Set();
   let waits = 0;
+  let resourceReads = 0, resourceWindow = 0, resourceRequests = 0;
   const prune = () => {
     const cutoff = now() - 3_600_000;
     for (const [id, item] of creates) if (item.at <= cutoff) creates.delete(id);
@@ -164,6 +176,19 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
     const snapshot = await invoke("snapshot");
     if (snapshot.status === 404 && name !== "grill_send") return ended(snapshot);
     if (snapshot.status !== 404) check(snapshot);
+    if (name === "grill_show") return out("VIEW", { round: snapshot.body.round, revision: snapshot.body.revision, viewLink: args.link });
+    if (name === "grill_ui_state") {
+      const r = args.afterRevision === undefined ? snapshot : await invoke("state", { afterRevision: args.afterRevision }, undefined, args.seconds ?? 25);
+      if (r.status === 404) return ended(r); check(r);
+      return r.status === 204 ? out("WAITING") : out("STATE", { snapshot: r.body });
+    }
+    if (name === "grill_ui_submit") {
+      const { round, expectedRevision, submissionId, ct, iv } = args;
+      const r = await invoke("answer", { expectedRevision, submissionId, ct, iv }, round);
+      if (r.status === 404) return ended(r);
+      if (r.status === 409) return out("CONFLICT"); check(r);
+      return out("SUBMITTED", { round, submissionId });
+    }
     if (name === "grill_send") {
       if ((args.grill === undefined) === (args.text === undefined) || (args.title !== undefined && typeof args.title !== "string") ||
         (args.text !== undefined && typeof args.text !== "string")) fail("INPUT");
@@ -259,7 +284,7 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
     if (!modern && req.headers["mcp-protocol-version"] !== undefined && !VERSIONS.includes(req.headers["mcp-protocol-version"])) return reply(400);
     if (!("id" in message)) return ["notifications/initialized", "notifications/cancelled"].includes(message.method) ? reply(202) : reply(400);
     const { id, params = {}, method } = message;
-    if (modern && method === "server/discover") return reply(200, response(id, { supportedVersions: [MODERN, ...VERSIONS], capabilities: { tools: {}, events: {} },
+    if (modern && method === "server/discover") return reply(200, response(id, { supportedVersions: [MODERN, ...VERSIONS], capabilities: { tools: {}, events: {}, resources: {} },
       instructions: CONTINUATION + HOSTED_INSTRUCTIONS, cacheScope: "public", ttlMs: 300_000 }));
     if (modern && method === "events/list") return reply(200, response(id, { events: [{ name: EVENT_NAME,
       description: "Current phone round's winning answer is ready. Wake this SAME subscribed interview chat, read/retain answers using its saved private link, ACK exact receipt, recompute frontier and publish next round. Payload is metadata only, not answer delivery.",
@@ -293,21 +318,35 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
         typeof params.clientInfo.version !== "string" || !params.clientInfo.version || params.clientInfo.version.length > 100)
         return reply(200, rpcError(id, -32602, "Invalid initialization parameters"));
       return reply(200, response(id, { protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : VERSIONS[0],
-        capabilities: { tools: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS + "\n\n" + CONTINUATION }));
+        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS + "\n\n" + CONTINUATION }));
     }
     if (method === "ping") return reply(200, response(id, {}));
     if (method === "tools/list") return reply(200, response(id, { tools: TOOLS, ...(modern ? { cacheScope: "public", ttlMs: 300_000 } : {}) }));
+    if (method === "resources/list") return reply(200, response(id, { resources: [{ uri: resource.uri, name: "Grill Me swipe cards", mimeType: resource.mimeType, _meta: resource._meta }], ...(modern ? { cacheScope: "public", ttlMs: 300_000 } : {}) }));
+    if (method === "resources/read") {
+      if (params.uri !== resource.uri) return reply(200, rpcError(id, -32602, "Unknown resource"));
+      // The cached public template is ~640KB. Bound copies and slow readers separately
+      // from tiny metadata calls; never allocate an unbounded queue of serialized HTML.
+      if (now() - resourceWindow >= 60_000) { resourceWindow = now(); resourceRequests = 0; }
+      if (resourceReads >= 4 || resourceRequests >= 60) return reply(429, rpcError(id, -32015, "Resource capacity reached"));
+      resourceReads++; resourceRequests++;
+      let released = false;
+      const release = () => { if (released) return; released = true; resourceReads--; clearTimeout(timer); res.off("finish", release); res.off("close", release); };
+      const timer = setTimeout(() => { res.destroy(); release(); }, 10_000); timer.unref();
+      res.once("finish", release); res.once("close", release);
+      return reply(200, response(id, { contents: [resource], ...(modern ? { cacheScope: "public", ttlMs: 300_000 } : {}) }));
+    }
     if (method !== "tools/call") return reply(modern ? 404 : 200, rpcError(id, -32601, "Method not found"));
     const tool = TOOLS.find(t => t.name === params.name);
     if (!tool) return reply(200, rpcError(id, -32602, "Unknown tool"));
     let args = params.arguments === undefined ? {} : params.arguments;
     try { validateArgs(tool, args); } catch { return reply(200, response(id, { isError: true, content: [{ type: "text", text: safeMessages.INPUT }] })); }
     const controller = new AbortController(); controllers.add(controller);
-    const budget = tool.name === "grill_wait" ? (args.seconds ?? 45) * 1000 : 15_000;
+    const budget = tool.name === "grill_wait" ? (args.seconds ?? 45) * 1000 : tool.name === "grill_ui_state" ? (args.seconds ?? 25) * 1000 + 1000 : 15_000;
     const deadline = receivedAt + budget;
     const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - performance.now())); timer.unref();
     const disconnect = () => controller.abort(); res.once("close", disconnect);
-    const sse = tool.name === "grill_wait";
+    const sse = tool.name === "grill_wait" || tool.name === "grill_ui_state";
     if (sse) { res.writeHead(200, { ...headers, "content-type": "text/event-stream", "x-accel-buffering": "no" }); res.flushHeaders(); res.write(": connected\n\n"); }
     const keepalive = sse ? setInterval(() => { if (!res.destroyed) res.write(": keepalive\n\n"); }, 10_000) : null;
     keepalive?.unref();
@@ -327,15 +366,17 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
       ]);
       // Some hosts expose only text content to their model. Include the exact capability,
       // state and ACK receipt there as well as structuredContent; PREPARED is never ready.
-      const text = value.status === "PREPARED"
+      const view = value.viewLink; delete value.viewLink;
+      const text = value.status === "VIEW" ? "Interactive cards are available in supporting hosts. Otherwise use the SAME private phone link already returned by grill_send. No answers have been collected."
+        : value.status === "PREPARED"
         ? `STATUS: PREPARED\n${JSON.stringify({ ...value, grillingInstructions: undefined })}\n\nRead and follow this complete grilling workflow BEFORE drafting questions:\n\n${value.grillingInstructions}\n\nPrivate capability only: publish the first round before showing the phone as ready.`
         : value.status === "ANSWERS" ? `${value.answers}\nSTATUS: ANSWERS\nACK receipt: ${JSON.stringify(value.receipt)}\n${value.message}`
         : `STATUS: ${value.status}\n${JSON.stringify(value)}${value.status === "PREPARED" ? "\nPrivate capability only: publish the first round before showing the phone as ready." : ""}` +
           (value.status === "READY" ? "\nShow the complete questions, then:\nGrill it on your phone\n" + value.link : "");
-      const body = response(id, { content: [{ type: "text", text }], structuredContent: value });
+      const body = response(id, { content: [{ type: "text", text }], structuredContent: value, ...(view ? { _meta: { "ai.grill-me/view": { link: view } } } : {}) });
       if (!res.destroyed) sse ? res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`) : reply(200, body);
     } catch (e) {
-      const timed = controller.signal.aborted && tool.name === "grill_wait";
+      const timed = controller.signal.aborted && ["grill_wait", "grill_ui_state"].includes(tool.name);
       const value = timed ? out("WAITING", { round: args.round }) : null;
       const body = response(id, timed ? { content: [{ type: "text", text: "STATUS: WAITING. Call again with the same link and round." }], structuredContent: value }
         : { isError: true, content: [{ type: "text", text: safeMessages[e?.safeCode] ?? safeMessages.UNAVAILABLE }] });
