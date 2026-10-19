@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { send, wait, check, resend, cancel } from "./index.js";
 import { isId } from "../../core/src/index.js";
+import { writeOutput } from "./output.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -25,12 +26,13 @@ send reads stdin when no file is given and stdin isn't a terminal.`;
 
 class UsageError extends Error {}
 
-function parse(argv, options, { min = 0, max = 1 } = {}) {
+function parse(argv, options, { min = 0, max = 1, takesId = false } = {}) {
   // Grill ids can start with '-' or '--', which parseArgs would reject as unknown
   // options. The id shape (16 canonical base64url chars) matches no option name
-  // or value, so pull the id out before parseArgs runs.
+  // or value, so pull the id out before parseArgs runs — but only for the commands
+  // that take an id; for send, a 16-character file name is a file, not an id.
   const args = [...argv];
-  const at = args.findIndex(isId);
+  const at = takesId ? args.findIndex(isId) : -1;
   const id = at === -1 ? undefined : args.splice(at, 1)[0];
   let parsed;
   try {
@@ -107,7 +109,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
         if (file && file !== "-") input = await fs.readFile(file, "utf8");
         else if (!file && stdin.isTTY) throw new UsageError("send needs a file, -, or piped stdin");
         else input = await readStdin(stdin);
-        const result = await send(input, { title: values.title, server: values.server, qr: values.qr ?? "dark" });
+        const result = await send(input, { title: values.title, server: values.server, qr: values.qr ?? "off" });
         if (values.json) out(JSON.stringify(result, null, 2));
         else printSend(out, result);
         return 0;
@@ -115,14 +117,23 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
 
       case "wait":
       case "fetch": {
-        const { values, positionals } = parse(rest, { ...serverOpt });
+        const { values, positionals } = parse(rest, { ...serverOpt }, { takesId: true });
         const [id] = positionals;
-        const result = await (cmd === "wait" ? wait(id, { server: values.server }) : check(id, { server: values.server }));
+        let result = await (cmd === "wait" ? wait(id, { server: values.server }) : check(id, { server: values.server }));
+        if (result.status === "ANSWERS") {
+          try {
+            if (result.canDeliver()) {
+              await writeOutput(stdout, `${result.lines}\nSTATUS: ANSWERS\n`, result.deliverySignal);
+              try { await result.ack(); }
+              catch { err("grill-me: answers delivered; cleanup failed, encrypted answers kept for retry."); }
+              return 0;
+            }
+          } finally {
+            result.dispose();
+          }
+          result = { status: "WAITING" };
+        }
         switch (result.status) {
-          case "ANSWERS":
-            if (result.deleteError) err(`grill-me: answers received, but deleting the grill failed: ${result.deleteError}`);
-            out(result.lines);
-            break;
           case "EXPIRED":
             out(`The grill expired before it was answered. Send it again with: npx -y grill-me-ai resend ${id}`);
             break;
@@ -142,19 +153,19 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
           qr: { type: "string" },
           json: { type: "boolean" },
           ...serverOpt,
-        });
+        }, { takesId: true });
         if (values.qr !== undefined && !["dark", "light", "off"].includes(values.qr)) {
           throw new UsageError("--qr must be dark, light or off");
         }
         const [id] = positionals;
-        const result = await resend(id, { server: values.server, qr: values.qr ?? "dark" });
+        const result = await resend(id, { server: values.server, qr: values.qr ?? "off" });
         if (values.json) out(JSON.stringify(result, null, 2));
         else printSend(out, result);
         return 0;
       }
 
       case "cancel": {
-        const { values, positionals } = parse(rest, { ...serverOpt });
+        const { values, positionals } = parse(rest, { ...serverOpt }, { takesId: true });
         const [id] = positionals;
         await cancel(id, { server: values.server });
         out(`Cancelled ${id}.`);
@@ -162,9 +173,12 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
         return 0;
       }
 
-      case "mcp":
-        out("grill-me mcp: coming in the next release.");
-        return 1;
+      case "mcp": {
+        parse(rest, {}, { max: 0 });
+        const { startStdioServer } = await import("./mcp-stdio.js");
+        await startStdioServer({ stdin, stdout, stderr });
+        return 0;
+      }
 
       default:
         err(`grill-me: unknown command "${cmd}"`);

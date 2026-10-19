@@ -144,3 +144,12 @@ test("encryptJson rejects unknown slots", async () => {
   await assert.rejects(encryptJson(keys.encKey, newId(), "cookie", {}), /bad slot/);
   await assert.rejects(decryptJson(keys.encKey, newId(), "cookie", { ct: "", iv: "" }), /bad slot/);
 });
+
+test("newId never starts with '-', and isId still accepts one that does", () => {
+  for (let i = 0; i < 1000; i++) {
+    const id = newId();
+    assert.ok(isId(id));
+    assert.ok(!id.startsWith("-"), id);
+  }
+  assert.ok(isId("-bcd1234_efgh-ij"), "the server and CLI still accept any valid id");
+});

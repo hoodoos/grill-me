@@ -1,32 +1,28 @@
 ---
 name: grill-me
-description: Turn a batch of questions for the user into swipe cards on their phone. Use whenever you are about to ask the user two or more questions — decisions, choices, clarifications, approvals. You print one short link and a QR code; the user answers by swiping; the answers arrive back in this session. End-to-end encrypted, nothing to install for the user. For a single question, just ask it in the terminal.
+description: Send questions as encrypted swipe cards on the user's phone. Use when the user explicitly asks to be grilled or to use Grill Me, or when you need to ask two or more questions. An explicit grill request also applies to one question; otherwise ask a single question in the conversation.
 ---
 
 # Grill Me — questions to phone, answers to session
 
-When you have **two or more questions** for the user, send them as a grill: the user answers by
-swiping on their phone, and the answers come back as your command's output. One question only:
-just ask it in the terminal, no grill.
+When the user explicitly asks to be grilled or to use Grill Me, send a grill with the CLI below.
+If the topic needs clarification, put that clarification in the grill rather than asking it in
+the terminal first. A single question is enough for an explicit request; do not invent extra questions.
 
-## 1. Write the questions in the grill text format
+Otherwise, use a grill when you have **two or more questions** for the user. Ask an ordinary single
+question in the terminal. The user answers on their phone, and the answers come back as the command's output.
 
-All open questions go in **one message**, each gets a ➡️ recommendation, and numbering continues
-across rounds (Q11, Q12, …). The format, word for word:
+## 1. Follow Matt Pocock’s complete grilling skill
 
-```
-❓ Q<n> - <title>
-<self-contained body; choices as bullets that start with a **bold short name**, never lettered>
-➡️ <the recommended choice, and why in a few words>
+Read [references/grilling.md](references/grilling.md) and follow it in full. It is the original
+skill, bundled unchanged: design tree, frontier rounds, recommendations, exact question format,
+fact-finding, recomputing the frontier after answers, and confirmation of shared understanding
+before acting. Do not substitute a generic batch of questions or a summary of the workflow.
 
----
-```
-
-- The title stays on the `❓` line; the body starts on the next line and is self-contained.
-- Choices are bullets like `- **Parsed**: parse locally, upload structured questions.` Never (a)/(b).
-- Every question ends with its `➡️` line, and a `---` line separates questions.
-
-**Also show the questions in your reply as usual**, so the user can answer in the terminal instead.
+Use Matt’s format in the visible chat reply and send exactly that same round to the phone.
+Continue question numbering across rounds. The phone link supplements the round; it does not
+replace the questions in chat. Only send ready frontier questions, never questions whose answers
+depend on other unresolved questions in this round.
 
 ## 2. Send the grill
 
@@ -38,9 +34,15 @@ npx -y grill-me-ai send - <<'EOF'
 EOF
 ```
 
-Put **the link from its output on its own line as plain text** in your reply (so it's clickable
-wherever markdown renders), and **the QR inside a code block**. Keep the `id`: `cancel`, `resend`
-and `fetch` need it.
+Show all the formatted questions in your reply, then end with:
+
+```text
+Grill it on your phone
+<the returned link>
+```
+
+Use the real link as plain text, without a code block. Do not print a QR code. Keep the `id`
+for `cancel`, `resend` and `fetch`; it is not part of the user-facing footer.
 
 ## 3. Wait for the answers in the background
 
@@ -67,3 +69,10 @@ Stop the background wait and run `npx -y grill-me-ai cancel <id>`.
 
 No background commands there: use the MCP tools `grill_send` and `grill_wait` if they are available,
 with the same format and status mapping.
+
+## Credit and source
+
+Original skill by [Matt Pocock](https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md), MIT licensed.
+The complete source is vendored unchanged in `references/grilling.md`, pinned to
+`49dd158d1076134a641b33efb035946536778336`; `references/UPSTREAM.json` records the source hash and
+`references/LICENSE` preserves the upstream notice. Grill Me adds phone delivery around it.

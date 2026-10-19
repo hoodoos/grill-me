@@ -24,10 +24,21 @@
 
   <h2>How it works</h2>
   <ol class="steps">
-    <li>Your agent prints one short link (and a QR code) and waits.</li>
+    <li>Your agent shows the questions in chat, adds a phone link, and waits.</li>
     <li>You open it on your phone and answer by swiping.</li>
     <li>The answers land in the agent's session within a second, end-to-end encrypted.</li>
   </ol>
+
+  <h2>Privacy</h2>
+  <p>With the CLI, plugins and local MCP, questions and answers are encrypted on your devices
+    before upload. The encryption key is in the part of the link after <code>#</code>, which
+    browsers do not send to the server. The server stores encrypted content.</p>
+  <p>Treat the full link as private: anyone who has it can read and answer that grill.
+    The agent deletes the server copy after collecting the answers. Otherwise, it expires
+    one hour after creation, or one hour after answers are submitted.</p>
+  <p>Your browser keeps the key, readable questions and answer progress locally so you can
+    reload or resume. Clear this site's browser data to remove those local copies. Your
+    agent and its provider can also see the questions and returned answers in your session.</p>
 
   <div class="cta">
     <a class="primary" href="/demo">Try the demo</a>
@@ -37,6 +48,9 @@
   <h2>For your agent</h2>
   <p>Built for claude.ai, the Claude apps, Claude Code and Codex. The <code>npx grill-me-ai</code>
     CLI, the Claude Code plugin and the MCP setup are coming soon — the demo above works today.</p>
+  <h2>Credits</h2>
+  <p>Grill Me uses <a href="https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md">Matt Pocock's complete grilling skill</a>,
+    bundled unchanged under the MIT license. Grill Me adds the phone swipe UI and encrypted delivery.</p>
 </main>
 </body>
 </html>

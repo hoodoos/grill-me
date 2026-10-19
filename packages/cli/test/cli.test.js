@@ -11,11 +11,12 @@ import { phoneAnswer } from "./phone.js";
 
 const BIN = fileURLToPath(new URL("../bin/grill-me.js", import.meta.url));
 
-function run(args, { input, inputChunks, home, server } = {}) {
+function run(args, { input, inputChunks, home, server, cwd } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN, ...args, ...(server ? ["--server", server] : [])], {
       env: { ...process.env, GRILL_ME_HOME: home },
       stdio: ["pipe", "pipe", "pipe"],
+      ...(cwd ? { cwd } : {}),
     });
     let stdout = "";
     let stderr = "";
@@ -80,18 +81,18 @@ test("send reads stdin and prints the exact block", async (t) => {
   assert.ok(await fs.stat(path.join(home, "pending", `${id}.json`)), "pending file written");
 });
 
-test("send prints the QR by default and JSON with --json", async (t) => {
+test("send prints a link without QR by default and JSON with --json", async (t) => {
   const { home, server } = await fixture(t);
   const plain = await run(["send", "-"], { input: DEMO_TEXT, home, server });
   assert.equal(plain.code, 0, plain.stderr);
-  assert.ok(plain.stdout.includes("▀") || plain.stdout.includes("▄") || plain.stdout.includes("█"), "QR in output");
+  assert.doesNotMatch(plain.stdout, /[▀▄█]/, "no QR in default output");
   assert.ok(sentId(plain.stdout));
 
   const json = await run(["send", "-", "--json"], { input: DEMO_TEXT, home, server });
   assert.equal(json.code, 0, json.stderr);
   const result = JSON.parse(json.stdout);
   assert.equal(result.count, 4);
-  assert.equal(typeof result.qr, "string");
+  assert.equal(result.qr, null);
   assert.match(result.link, /^http/);
   assert.match(result.id, /^[A-Za-z0-9_-]{16}$/);
   assert.ok(result.expiresAt);
@@ -181,11 +182,10 @@ test("an id that starts with a dash is parsed as the id, not an option", async (
   }
 });
 
-test("mcp is a placeholder that exits 1", async (t) => {
+test("mcp starts the stdio server and exits when stdin closes", async (t) => {
   const { home } = await fixture(t);
-  const r = await run(["mcp"], { home });
-  assert.equal(r.code, 1);
-  assert.match(r.stdout, /coming in the next release/);
+  const r = await run(["mcp"], { input: "", home });
+  assert.equal(r.code, 0);
 });
 
 test("send over stdin survives an emoji split across chunks", async (t) => {
@@ -215,4 +215,15 @@ test("send with >64 KB of emoji over stdin fails on size without corruption", as
   assert.equal(r.code, 2, "fails the body size limit");
   assert.match(r.stderr, /4000 characters/);
   assert.ok(!r.stderr.includes("�") && !r.stdout.includes("�"), "no replacement characters");
+});
+
+test("send treats an id-shaped file name as a file, never as an id", async (t) => {
+  const { home, server } = await fixture(t);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "grill-me-file-"));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  // 16 canonical base64url chars: isId("myquestionsfile1") is true, but send takes a file.
+  await fs.writeFile(path.join(dir, "myquestionsfile1"), DEMO_TEXT);
+  const r = await run(["send", "myquestionsfile1", "--qr", "off"], { home, server, cwd: dir });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^Grill Me: 4 questions/m);
 });

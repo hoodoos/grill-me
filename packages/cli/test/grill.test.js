@@ -34,7 +34,7 @@ test("send → pending file → phone answers → wait returns ANSWERS and clean
   const r = await send(DEMO_TEXT, { server, home });
   assert.equal(r.count, 4);
   assert.match(r.link, new RegExp(`^${server}/g/[A-Za-z0-9_-]{16}#[A-Za-z0-9_-]{22}$`));
-  assert.ok(r.qr.length > 0);
+  assert.equal(r.qr, null);
 
   const pending = await readPending(home, r.id);
   assert.equal(pending.id, r.id);
@@ -50,6 +50,9 @@ test("send → pending file → phone answers → wait returns ANSWERS and clean
   assert.equal(result.status, "ANSWERS");
   assert.equal(result.lines, EXPECTED_LINES);
   await answering;
+  assert.ok((await readPending(home, r.id)).answerBlob, "encrypted cache persisted before delivery");
+  assert.ok(fake.grill(r.id), "no DELETE before explicit delivery acknowledgement");
+  await result.ack();
 
   assert.equal(await readPending(home, r.id), null, "pending file removed");
   assert.equal(fake.grill(r.id), undefined, "grill DELETEd");
@@ -99,6 +102,7 @@ test("transient failures are retried quietly, then ANSWERS", async (t) => {
   const result = await wait(r.id, { home, backoffMs: () => 10, onRetry: (info) => retries.push(info) });
   assert.equal(result.status, "ANSWERS");
   assert.equal(result.lines, EXPECTED_LINES);
+  await result.ack();
   assert.equal(retries.length, 3);
   assert.deepEqual(retries.map((x) => x.error.code), ["server", "server", "server"]);
   await answering;
@@ -125,6 +129,7 @@ test("fetch → WAITING, then ANSWERS once the phone has answered", async (t) =>
   const second = await check(r.id, { home });
   assert.equal(second.status, "ANSWERS");
   assert.equal(second.lines, EXPECTED_LINES);
+  await second.ack();
   assert.equal(fake.grill(r.id), undefined);
   assert.equal(await readPending(home, r.id), null);
 });
@@ -151,7 +156,9 @@ test("resend: new id and new secret, same contentHash, old pending removed, old 
 
   // the re-sent grill works end to end
   const answering = sleep(150).then(() => phoneAnswer(server, r2.id, after.secret, PICKS));
-  assert.equal((await wait(r2.id, { home })).status, "ANSWERS");
+  const recovered = await wait(r2.id, { home });
+  assert.equal(recovered.status, "ANSWERS");
+  await recovered.ack();
   await answering;
 });
 
@@ -246,7 +253,9 @@ test("metrics: user-agent header and question-count bucket on every request", as
   const r = await send(DEMO_TEXT, { server, home, agent: "test-agent" });
   const pending = await readPending(home, r.id);
   const answering = sleep(150).then(() => phoneAnswer(server, r.id, pending.secret, PICKS));
-  assert.equal((await wait(r.id, { home, agent: "test-agent" })).status, "ANSWERS");
+  const result = await wait(r.id, { home, agent: "test-agent" });
+  assert.equal(result.status, "ANSWERS");
+  await result.ack();
   await answering;
   // the CLI's requests are create/poll/delete; the phone's (GET grill, POST answers) are not
   const agents = fake
@@ -274,4 +283,16 @@ test("metrics: user-agent header and question-count bucket on every request", as
   await send({ questions: [{ title: "Only one" }] }, { server, home });
   assert.equal(creates().at(-1).userAgent, "grill-me-ai/0.1.0");
   assert.equal(creates().at(-1).qb, "1");
+});
+
+test("wait honours an AbortSignal promptly and keeps the pending file", async (t) => {
+  const { home, server, fake } = await fixture(t);
+  const r = await send(DEMO_TEXT, { server, home });
+  const ctrl = new AbortController();
+  const started = Date.now();
+  setTimeout(() => ctrl.abort(), 120);
+  await assert.rejects(() => wait(r.id, { home, signal: ctrl.signal }), { code: "aborted" });
+  assert.ok(Date.now() - started < 2000, "the wait stopped promptly");
+  assert.ok((await readPending(home, r.id)) !== null, "pending file kept");
+  assert.ok(fake.grill(r.id) !== undefined, "grill not deleted");
 });

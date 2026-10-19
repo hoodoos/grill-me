@@ -8,8 +8,8 @@ It's a free, open-source taster for Agent Hub: the same grill UI, without accoun
 
 ## Goals
 
-- An agent with 2+ questions prints **one short link and the same link as a QR code**. You open it on any device
-  and answer by swiping. The answers arrive in the agent's session within a second.
+- An agent with 2+ questions shows **the formatted questions, followed by “Grill it on your phone” and one
+  short link**. You open it on any device and answer by swiping. The answers arrive in the agent's session within a second.
 - **End-to-end encrypted.** The server stores only encrypted data, and in local mode (CLI, plugin, local MCP
   server, Desktop extension) the key never reaches it. App mode (the hosted MCP server for claude.ai and
   ChatGPT, see [Hosted mode](#hosted-mode-grill-meaimcp)) encrypts on the server in memory and still never stores
@@ -29,7 +29,7 @@ Not goals: accounts, history, sharing grills with other people, push notificatio
 agent machine                          grill-me.ai                         phone
 ─────────────                          ───────────                         ─────
 grill-me send ── encrypted grill ──▶   stores encrypted data (≤ 1 h)
-  prints link + QR                                                          opens link/QR
+  prints questions + link                                                  opens link
 grill-me wait ── long poll ─────────▶  holds the request (≤ 50 s)  ◀── GET  decrypts, swipes
                                                                             (progress in localStorage)
               ◀── encrypted answers ── answers the open request    ◀── POST encrypted answers
@@ -46,7 +46,7 @@ DELETE ────────────────────────�
     taken; the agent then picks a new one.
   - `secret`: 16 random bytes, base64url (22 chars). The agent creates it. It sits after `#`, so browsers
     never send it to the server.
-  - The whole link is about 60 characters, which makes a small QR code that's easy to scan from a terminal.
+  - The whole link is about 60 characters. Normal agent replies show it as a clickable link.
 - Two keys come from the `secret`, using HKDF-SHA256 with an empty salt (Web Crypto, so the same code runs in
   Node and browsers). Test vectors are in `packages/core/test/fixtures/crypto-vectors.json`:
   - `encKey` = HKDF(secret, info `grill-me/v1/enc`): AES-256-GCM. Each blob gets a random 12-byte IV, and the
@@ -90,7 +90,8 @@ its names joined with `, `. A question left unanswered is sent as skipped.
 1. **Structured**: the internal format itself. The MCP tool's input schema *is* this format, so agents fill in
    fields and nothing needs parsing. This is the main path.
 2. **Text**, run through converters in this order; the first one that finds questions wins:
-   - **Grill text**: `❓ Q<n> - title` / body / bold-named bullets / `➡️ recommendation` / `---`. The lenient
+   - **Grill text**: Matt’s `❓ **Q<n>** - **title**: body` / choices / `➡️ recommendation` / `---`
+     (also accepts the existing `❓ Q<n> - title` line with body below). The lenient
      parser is ported from Agent Hub's `src/grill.mjs`, together with its fixtures.
    - **Claude AskUserQuestion JSON**: `questions[].question/header/options[].label/description`, with
      `(Recommended)` labels turned into `recommend`.
@@ -196,7 +197,7 @@ and versions, plus live health: open waiting requests, requests and errors per m
 
 | Command | What it does |
 |---|---|
-| `grill-me send [file\|-]` | Converts, encrypts, uploads. Prints the link, a terminal QR and the `id`. Saves `~/.grill-me/pending/<id>.json` (secret + grill). `--qr light` for light terminals, `--qr off`, `--json` |
+| `grill-me send [file\|-]` | Converts, encrypts, uploads. Prints the link and the `id`, without a QR by default. Saves `~/.grill-me/pending/<id>.json` (secret + grill). Explicit legacy `--qr dark|light`, `--qr off`, `--json` |
 | `grill-me wait <id>` | Long-polls until answers arrive or the grill expires. Prints the answers, **then** `DELETE`s, then removes the local pending file |
 | `grill-me fetch <id>` | Checks once without waiting ("check grill"), then deletes the same way |
 | `grill-me resend <id>` | Re-uploads an expired grill under a new id. The phone resumes its progress |
@@ -214,14 +215,23 @@ and versions, plus live health: open waiting requests, requests and errors per m
 
 A brief network error is retried quietly. A dropped wait never loses answers, because they stay on the server
 until the agent deletes them or the grill expires.
+Locally, encrypted answers are cached atomically in the pending record before delivery and replayed until output succeeds and DELETE is confirmed, so cancellation or a lost DELETE reply cannot lose answers.
 
-The terminal QR uses Unicode half blocks, ECC level M, and a 2-module quiet zone. By default it is drawn for a
-dark terminal: the light modules are the blocks. That default was tested by scanning a Claude Code reply with a
-phone, and `--qr light` flips it for light terminals.
+Normal CLI sends and agent replies do not generate or print QR codes. The explicit legacy CLI QR option
+uses Unicode half blocks, ECC level M, and a 2-module quiet zone; `--qr light` is for light terminals.
+
+### Grilling workflow
+
+Use Matt Pocock’s complete `grilling` skill, including its exact question format, design-tree
+frontier rounds, fact-finding, recommendations and confirmation of shared understanding before acting.
+The source is pinned to `mattpocock/skills@49dd158d1076134a641b33efb035946536778336` and bundled
+unchanged: `references/grilling.md` in both plugin skills and `packages/core/src/grilling.md` for
+MCP-only clients. The local MCP server supplies the full upstream body in its initialize instructions.
+Grill Me adds phone delivery after each visible round; it does not replace the interview workflow.
 
 ### MCP tools (local server, `grill-me mcp`)
 
-- `grill_send({ grill? | text?, title? })` → `{ id, link, qr }` (`qr` is text for the agent to print)
+- `grill_send({ grill? | text?, title? })` → `{ id, link, count, expiresAt }` (no QR payload)
 - `grill_wait({ id, seconds? })` → `{ status, answers? }`. It long-polls inside the call and deletes the grill
   after it returns `ANSWERS`. It must return before the client's tool time limit, which is 60 s by default in
   Codex and ChatGPT and 240 s in claude.ai and Claude Desktop. So `seconds` defaults to env
@@ -246,6 +256,7 @@ never sees a key.
   args = ["-y", "grill-me-ai", "mcp"]
   startup_timeout_sec = 60
   tool_timeout_sec = 900
+  default_tools_approval_mode = "approve"
   env = { GRILL_ME_WAIT_SECONDS = "840" }
   ```
 
@@ -258,7 +269,7 @@ agent:
 
 1. When you have 2+ questions for the user, write them in the grill text format. Show them in your reply as
    usual, so answering in the terminal still works.
-2. Run `npx grill-me-ai send`. Put the link in your reply as plain text, and the QR in a code block.
+2. Run `npx grill-me-ai send`. Show the formatted questions, then end your reply with “Grill it on your phone” and the link as plain text.
 3. Run `npx grill-me-ai wait <id>` **as a background command** and end your turn. Claude Code wakes you when it
    exits, with the answers as its output.
 4. If the user answers in the terminal first, stop the background wait and run `grill-me cancel <id>`.
@@ -278,7 +289,7 @@ server also serves a remote MCP endpoint at `https://grill-me.ai/mcp`, with the 
 - **No auth (authless).** Both claude.ai and ChatGPT allow that for custom connectors.
 - **Key with the model:**
   - `grill_send`: the server makes the id and secret, encrypts in memory, and stores only the ciphertext and
-    `writeHash`, exactly as in local mode. It returns `{ id, link, qr }`. Then it forgets the secret: it isn't
+    `writeHash`, exactly as in local mode. It returns `{ id, link, count, expiresAt }`. Then it forgets the secret: it isn't
     written to disk or logs, and no reference is kept after the call.
   - `grill_wait({ link } | { id, secret }, seconds?)`: the model passes the link back. The server derives the
     keys, long-polls inside the call, decrypts the answers in memory and returns the answer lines. Then it
@@ -379,6 +390,5 @@ Later: in-chat swipe cards through the MCP Apps extension.
 ## Open questions
 
 None left. Decided: MIT license; one npm package `grill-me-ai` (`grill-me` was refused as too close to the existing `grillme`); hosted on the existing DigitalOcean server. The
-Agent Hub waitlist comes later; until then the done screen links to a placeholder. Decided 2026-10-18: the dark
-QR is the default; metrics are the daily funnel above, on a private `/stats` page; hosted mode keeps the key with
-the model; desktop users get local mode through the `.mcpb` extension and the Codex snippet.
+Agent Hub waitlist comes later; until then the done screen links to a placeholder. Updated 2026-10-19: formatted questions plus a phone link are the default; QR is an explicit legacy CLI option.
+Metrics are the daily funnel above, on a private `/stats` page; hosted mode keeps the key with the model; desktop users get local mode through the `.mcpb` extension and the Codex snippet.

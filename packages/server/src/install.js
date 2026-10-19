@@ -36,7 +36,7 @@ export function renderInstallHtml(md) {
     if (para.length) out.push(`<p>${inline(para.join(" "))}</p>`);
     para = [];
   };
-  for (const line of md.split("\n")) {
+  for (const line of md.split(/\r?\n/)) {
     if (fence) {
       if (line.startsWith("```")) {
         out.push(`<pre><code>${esc(fence.join("\n"))}\n</code></pre>`);

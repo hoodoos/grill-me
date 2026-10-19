@@ -12,6 +12,9 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
   const requests = []; // every request: { method, path, userAgent }
   let failNextCount = 0;
   let conflictNextCount = 0;
+  let intercept = () => false;
+  let afterDelete = () => false;
+  let failureStatus = 500;
 
   const gone = (g) => !g || g.expiresAt <= Date.now();
 
@@ -50,9 +53,10 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
       const url = new URL(req.url, "http://fake");
       const parts = url.pathname.split("/").filter(Boolean);
       requests.push({ method: req.method, path: url.pathname, userAgent: req.headers["user-agent"] });
+      if (await intercept(req, res)) return;
       if (failNextCount > 0) {
         failNextCount--;
-        return send(500, { error: "injected failure" });
+        return send(failureStatus, { error: "injected failure" });
       }
 
       if (req.method === "POST" && url.pathname === "/api/g") {
@@ -113,6 +117,7 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
         if (!authed) return send(401, { error: "bad token" });
         grills.delete(id);
         flush(id);
+        if (await afterDelete(req, res)) return;
         return send(204);
       }
       return send(404, { error: "not found" });
@@ -129,8 +134,11 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
     creates: () => requests.filter((r) => r.method === "POST" && r.path === "/api/g").length,
     requests: () => requests,
     waitParams: (id) => grills.get(id)?.waitParams ?? [],
-    failNext: (n = 1) => {
+    intercept: (handler) => { intercept = handler; },
+    afterDelete: (handler) => { afterDelete = handler; },
+    failNext: (n = 1, status = 500) => {
       failNextCount = n;
+      failureStatus = status;
     },
     conflictNext: (n = 1) => {
       conflictNextCount = n;
@@ -146,6 +154,7 @@ export async function startFakeServer({ maxWait = 0.2 } = {}) {
       new Promise((resolve) => {
         for (const set of waiters.values()) for (const { res, timer } of set) clearTimeout(timer);
         server.close(resolve);
+        server.closeAllConnections();
       }),
   };
 }

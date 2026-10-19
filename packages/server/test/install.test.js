@@ -45,6 +45,18 @@ test("renderHomepage keeps $-sequences in the guide literal", () => {
   assert.equal(html, "<body><p>Cost: <code>$&amp;</code> and $' and $1</p></body>");
 });
 
+test("renderHomepage renders CRLF headings, paragraphs and commands like LF", async () => {
+  const md = (await readFile(INSTALL_MD, "utf8")).replace(/\r\n/g, "\n");
+  const template = `<body>${INSTALL_MARKER}</body>`;
+  const lf = renderHomepage(template, md);
+  const crlf = renderHomepage(template, md.replace(/\n/g, "\r\n"));
+  assert.equal(crlf, lf);
+  assert.ok(crlf.includes("<h3>Install Grill Me</h3>"));
+  assert.ok(crlf.includes("<h4>Codex in VS Code or another IDE</h4>"));
+  assert.ok(crlf.includes('<pre><code>claude plugin marketplace add hoodoos/grill-me\n'));
+  assert.ok(!crlf.includes("\r"), "rendered commands contain no carriage returns");
+});
+
 async function start() {
   const { server, close } = createServer({ db: ":memory:" });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
