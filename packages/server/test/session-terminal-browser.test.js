@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "../src/server.js";
 import { sendRound, wait, finish, cancel } from "../../cli/src/index.js";
 import { readPending } from "../../cli/src/pending.js";
-import { deriveSessionKeys } from "../../core/src/session.js";
+import { deriveSessionKeys, sealRoundAnswers } from "../../core/src/session.js";
 import { newId, newSecret } from "../../core/src/crypto.js";
 
 test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, no-key reload and stale-tab purge", {
@@ -85,24 +85,8 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] }); await cdp.detach();
   await page.locator(".gm-send").click(); await page.locator("#screen-done:not([hidden])").waitFor();
   assert.equal(await page.locator("#thinking-stack").count(), 0, "Sent is not proof of pickup/ACK");
-  // Hold exactly the post-idle150ms gap: a rapid offline/online pair must cause an immediate
-  // snapshot even when there was no in-flight fetch to abort. The real network stays unchanged.
-  await page.evaluate(() => {
-    const timer = globalThis.setTimeout;
-    globalThis.setTimeout = (fn, ms, ...args) => {
-      if (ms === 150 && document.querySelector(".session-thinking:not([hidden])")) {
-        globalThis.releaseIdlePollGap = () => { globalThis.setTimeout = timer; fn(...args); };
-        return 0;
-      }
-      return timer(fn, ms, ...args);
-    };
-  });
   const answers = await wait(session.id, { ...opts, seconds: 10 }); assert.equal(answers.lines, "Q1 - agree"); await answers.ack();
   await text(thinking);
-  await page.waitForFunction(() => typeof globalThis.releaseIdlePollGap === "function");
-  await context.setOffline(true); await text("Can't reach grill-me.ai right now.");
-  assert.equal(await page.locator("#thinking-stack").count(), 0, "errors must not keep loading decoration");
-  await context.setOffline(false); await page.evaluate(() => globalThis.releaseIdlePollGap()); await text(thinking);
   const geometry = [];
   for (const [width, height] of [[390, 844], [390, 350], [1280, 800]]) {
     await page.setViewportSize({ width, height });
@@ -144,6 +128,43 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
   await page.reload(); await text(finished); await purged(page); // no key remains: public receipt resolves it
   await other.close();
 
+  // Isolate the controlled gap from the cross-tab scenario. Put a separate real session into
+  // idle before the phone boots, and install the one-shot timer barrier before any module runs.
+  // The first poll must return the existing idle snapshot; its following150ms gap is therefore
+  // captured regardless of whether syncOnce or pollLoop rendered the thinking class first.
+  const gap = await sendRound(grill, opts), gapRecord = await readPending(home, gap.id);
+  const gapKeys = await deriveSessionKeys(gapRecord.secret), submissionId = newId();
+  const gapBlob = await sealRoundAnswers({ v: 1, answers: [{ n: 1, kind: "agree" }] }, grill,
+    { id: gap.id, secret: gapRecord.secret, round: 1 });
+  assert.equal((await fetch(`${opts.server}/api/s/${gap.id}/rounds/1/answers`, { method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${gapKeys.writeToken}` },
+    body: JSON.stringify({ expectedRevision: 1, submissionId, ...gapBlob }) })).status, 204);
+  const gapAnswers = await wait(gap.id, { ...opts, seconds: 10 }); await gapAnswers.ack();
+  await page.addInitScript(id => {
+    if (location.pathname !== `/g/${id}`) return;
+    const timer = globalThis.setTimeout;
+    let held = false;
+    globalThis.setTimeout = (fn, ms, ...args) => {
+      if (ms === 150 && !held) {
+        held = true;
+        globalThis.releaseIdlePollGap = () => { globalThis.setTimeout = timer; fn(...args); };
+        return 0;
+      }
+      return timer(fn, ms, ...args);
+    };
+  }, gap.id);
+  await page.goto(gap.link); await text(thinking);
+  await page.waitForFunction(() => typeof globalThis.releaseIdlePollGap === "function", null, { timeout: 8000 });
+  assert.equal(requests.some(r => r.url === `/api/s/${gap.id}?after=3&wait=50`), false,
+    "the idle polling gap is held before a next long poll can be in flight");
+  await context.setOffline(true); await text("Can't reach grill-me.ai right now.");
+  assert.equal(await page.locator("#thinking-stack").count(), 0, "errors must not keep loading decoration");
+  const beforeReconnect = requests.length;
+  await context.setOffline(false); await page.evaluate(() => globalThis.releaseIdlePollGap()); await text(thinking);
+  assert.ok(requests.slice(beforeReconnect).some(r => r.url === `/api/s/${gap.id}?wait=0`),
+    "reconnect performs a real immediate state recheck rather than waiting50s");
+  await finish(gap.id, opts); await text(finished); await purged(page);
+
   // Termination in a polling gap/offline interval, then reconnect and reload.
   const away = await sendRound(grill, opts);
   await page.goto(away.link); await page.locator(".gm-no").click(); await page.locator("textarea").fill("Offline current draft");
@@ -172,5 +193,6 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
   console.log(JSON.stringify({ result: "PASS", realTouch: true, warm02Cache: true, cacheCleared: false,
     finish: "open longpoll and no-key reload", pendingFinish409: true, cancel: "offline polling gap/reconnect/reload",
     expiry: "open poll and reload", unknownNeverFinished: true, markerExpiryGeneric: true, staleTabPurge: true,
-    thinkingAfterAckOnly: true, controlledIdlePollingGap: true, reducedMotionStatic: true, nextRoundReplacesAnimation: true, geometry, pageerrors: errors, requests }, null, 2));
+    thinkingAfterAckOnly: true, controlledIdlePollingGap: "single-tab, idle-before-boot, pre-module one-shot barrier",
+    reducedMotionStatic: true, nextRoundReplacesAnimation: true, geometry, pageerrors: errors, requests }, null, 2));
 });
