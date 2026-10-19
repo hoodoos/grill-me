@@ -12,24 +12,17 @@ the terminal first. A single question is enough for an explicit request; do not 
 Otherwise, use a grill when you have **two or more questions** for the user. Ask an ordinary single
 question in the terminal. The user answers on their phone, and the answers come back as the command's output.
 
-## 1. Write the questions in the grill text format
+## 1. Follow Matt Pocock’s complete grilling skill
 
-All open questions go in **one message**, each gets a ➡️ recommendation, and numbering continues
-across rounds (Q11, Q12, …). The format, word for word:
+Read [references/grilling.md](references/grilling.md) and follow it in full. It is the original
+skill, bundled unchanged: design tree, frontier rounds, recommendations, exact question format,
+fact-finding, recomputing the frontier after answers, and confirmation of shared understanding
+before acting. Do not substitute a generic batch of questions or a summary of the workflow.
 
-```
-❓ Q<n> - <title>
-<self-contained body; choices as bullets that start with a **bold short name**, never lettered>
-➡️ <the recommended choice, and why in a few words>
-
----
-```
-
-- The title stays on the `❓` line; the body starts on the next line and is self-contained.
-- Choices are bullets like `- **Parsed**: parse locally, upload structured questions.` Never (a)/(b).
-- Every question ends with its `➡️` line, and a `---` line separates questions.
-
-**Also show the questions in your reply as usual**, so the user can answer in the terminal instead.
+Use Matt’s format in the visible chat reply and send exactly that same round to the phone.
+Continue question numbering across rounds. The phone link supplements the round; it does not
+replace the questions in chat. Only send ready frontier questions, never questions whose answers
+depend on other unresolved questions in this round.
 
 ## 2. Send the grill
 
@@ -77,7 +70,9 @@ Stop the background wait and run `npx -y grill-me-ai cancel <id>`.
 No background commands there: use the MCP tools `grill_send` and `grill_wait` if they are available,
 with the same format and status mapping.
 
-## Credit
+## Credit and source
 
-Question format adapted from [Matt Pocock’s grilling skill](https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling),
-MIT licensed. Phone delivery and this client workflow are Grill Me adaptations.
+Original skill by [Matt Pocock](https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md), MIT licensed.
+The complete source is vendored unchanged in `references/grilling.md`, pinned to
+`49dd158d1076134a641b33efb035946536778336`; `references/UPSTREAM.json` records the source hash and
+`references/LICENSE` preserves the upstream notice. Grill Me adds phone delivery around it.

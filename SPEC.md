@@ -90,7 +90,8 @@ its names joined with `, `. A question left unanswered is sent as skipped.
 1. **Structured**: the internal format itself. The MCP tool's input schema *is* this format, so agents fill in
    fields and nothing needs parsing. This is the main path.
 2. **Text**, run through converters in this order; the first one that finds questions wins:
-   - **Grill text**: `❓ Q<n> - title` / body / bold-named bullets / `➡️ recommendation` / `---`. The lenient
+   - **Grill text**: Matt’s `❓ **Q<n>** - **title**: body` / choices / `➡️ recommendation` / `---`
+     (also accepts the existing `❓ Q<n> - title` line with body below). The lenient
      parser is ported from Agent Hub's `src/grill.mjs`, together with its fixtures.
    - **Claude AskUserQuestion JSON**: `questions[].question/header/options[].label/description`, with
      `(Recommended)` labels turned into `recommend`.
@@ -218,6 +219,15 @@ Locally, encrypted answers are cached atomically in the pending record before de
 
 Normal CLI sends and agent replies do not generate or print QR codes. The explicit legacy CLI QR option
 uses Unicode half blocks, ECC level M, and a 2-module quiet zone; `--qr light` is for light terminals.
+
+### Grilling workflow
+
+Use Matt Pocock’s complete `grilling` skill, including its exact question format, design-tree
+frontier rounds, fact-finding, recommendations and confirmation of shared understanding before acting.
+The source is pinned to `mattpocock/skills@49dd158d1076134a641b33efb035946536778336` and bundled
+unchanged: `references/grilling.md` in both plugin skills and `packages/core/src/grilling.md` for
+MCP-only clients. The local MCP server supplies the full upstream body in its initialize instructions.
+Grill Me adds phone delivery after each visible round; it does not replace the interview workflow.
 
 ### MCP tools (local server, `grill-me mcp`)
 

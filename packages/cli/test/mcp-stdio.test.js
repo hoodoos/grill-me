@@ -81,7 +81,7 @@ async function fixture(t, { clientName = "Claude Code", env = {} } = {}) {
   assert.equal(init.result.serverInfo.name, "grill-me");
   assert.equal(init.result.protocolVersion, "2025-06-18");
   mcp.notify("notifications/initialized");
-  return { home, fake, child, mcp };
+  return { home, fake, child, mcp, init };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -92,6 +92,13 @@ const until = async (condition, timeout = 2000) => {
     await sleep(10);
   }
 };
+
+test("MCP-only clients receive Matt Pocock's complete upstream grilling workflow", async (t) => {
+  const { init } = await fixture(t);
+  const source = await fs.readFile(new URL("../../core/src/grilling.md", import.meta.url), "utf8");
+  const body = source.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n(?:\r?\n)?/, "");
+  assert.ok(init.result.instructions.includes(body), "complete upstream body, including format and completion rule");
+});
 
 test("initialize → tools/list → grill_send → phone answers → grill_wait → ANSWERS", async (t) => {
   const { home, fake, mcp } = await fixture(t);

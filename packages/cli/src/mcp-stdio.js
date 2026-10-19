@@ -8,12 +8,18 @@ import { writeOutput } from "./output.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
+// The complete upstream skill is shipped verbatim; clients without a plugin receive it here.
+const GRILLING = (await fs.readFile(new URL("../../core/src/grilling.md", import.meta.url), "utf8"))
+  .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n(?:\r?\n)?/, "");
+
 const INSTRUCTIONS =
   "Grill Me turns questions into phone swipe cards. Use grill_send when the user explicitly asks to be grilled " +
   "(even one clarifying question), or when you have two or more questions. Without an explicit grill request, " +
-  "ask a single question in chat. Show every question in full in the usual grill format, then end your reply " +
+  "ask a single question in chat. Follow Matt Pocock’s complete grilling skill below, including its exact format. " +
+  "Show every question in full, then end your reply " +
   "with 'Grill it on your phone' and the returned link as plain text. Do not print a QR code. " +
-  "Then call grill_wait with the id. If the user answers in chat instead, call grill_cancel.";
+  "Then call grill_wait with the id. If the user answers in chat instead, call grill_cancel.\n\n" +
+  "Matt Pocock’s complete grilling skill (MIT):\n\n" + GRILLING;
 
 // GRILL_ME_WAIT_SECONDS is both the default and, when set, the cap: each client sets it to fit
 // its tool time limit (Desktop 180 < 240 s, Codex 840 < 900), so a larger `seconds` must not
@@ -66,7 +72,7 @@ function localTools(env) {
       }
       return {
         text:
-          `Show every question in full in the usual grill format, then end your reply with:\n\n` +
+          `Show the complete frontier round in Matt Pocock’s exact grilling format, then end your reply with:\n\n` +
           `Grill it on your phone\n${result.link}\n\n` +
           `Then call grill_wait with id "${result.id}".`,
         structured: { id: result.id, link: result.link, count: result.count, expiresAt: result.expiresAt },

@@ -88,9 +88,9 @@ about an hour if it isn't. The details, and how hosted mode differs, are in
 
 ## Credits
 
-The question format is adapted from [Matt Pocock’s grilling skill](https://github.com/mattpocock/skills/tree/main/skills/productivity/grilling).
-Grill Me adds the phone swipe UI and encrypted question-and-answer delivery. The bundled skills
-are adaptations, rather than a dependency on the complete upstream interview workflow.
+Grill Me uses [Matt Pocock’s complete grilling skill](https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md), bundled unchanged under the MIT license.
+Its interview workflow and question format stay intact; Grill Me adds the phone swipe UI and
+encrypted question-and-answer delivery. The source is pinned to `49dd158d1076134a641b33efb035946536778336`.
 
 ## Development
 

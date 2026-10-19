@@ -167,16 +167,14 @@ when it exits; a local MCP client uses grill_send then grill_wait, repeating on 
 Return the actual answer lines. Do not carry out any snack/place decision or other real
 action after the answers; this is only an acceptance test.
 
-❓ Q1 - Snack drink
-Choose a drink for this disposable test.
+❓ **Q1** - **Snack drink**: Choose a drink for this disposable test.
 - **Tea**: a cup of tea.
 - **Coffee**: a cup of coffee.
 ➡️ Tea: a simple test recommendation.
 
 ---
 
-❓ Q2 - Place
-Choose a place for this disposable test.
+❓ **Q2** - **Place**: Choose a place for this disposable test.
 - **Indoors**: stay inside.
 - **Outdoors**: go outside.
 ➡️ Indoors: a simple test recommendation.
