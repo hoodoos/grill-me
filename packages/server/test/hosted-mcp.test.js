@@ -52,6 +52,7 @@ test("hosted instructions, six independent schemas and strict sanitized HTTP/JSO
   const tools = (await (await f.rpc("tools/list")).json()).result.tools;
   assert.deepEqual(tools.map(t => t.name), ["grill_start", "grill_send", "grill_wait", "grill_ack", "grill_finish", "grill_cancel"]);
   assert.equal(tools.find(t => t.name === "grill_wait").annotations.readOnlyHint, true);
+  assert.equal(tools.find(t => t.name === "grill_start").annotations.readOnlyHint, true);
   assert.equal(tools.find(t => t.name === "grill_ack").annotations.destructiveHint, true);
   for (const method of [sentinel, "tools/call"]) {
     const raw = await (await f.rpc(method, { name: sentinel, arguments: { link: sentinel } })).text();
@@ -62,6 +63,12 @@ test("hosted instructions, six independent schemas and strict sanitized HTTP/JSO
     [{ headers: { ...headers, "mcp-session-id": "fake" } }, 400], [{ headers: { ...headers, "mcp-protocol-version": "bad" } }, 400],
     [{ body: "{" }, 400], [{ body: JSON.stringify([]) }, 400], [{ body: JSON.stringify({ jsonrpc: "2.0", id: null, method: "ping" }) }, 400],
     [{ body: " ".repeat(32769) }, 413]]) assert.equal((await f.rpc("ping", {}, override)).status, status);
+  assert.equal((await f.rpc("ping", {}, { headers: { ...headers, accept: "application/json;q=0,text/event-stream" } })).status, 406);
+  assert.equal((await (await f.rpc("initialize", {})).json()).error.code, -32602);
+  for (const arguments_ of [null, { constructor: sentinel }, { __proto__: null, toString: sentinel }]) {
+    const r = await f.rpc("tools/call", { name: "grill_start", arguments: arguments_ });
+    const body = await r.text(); assert.equal(JSON.parse(body).result.isError, true); assert.ok(!body.includes(sentinel));
+  }
   assert.equal((await fetch(f.base + "/mcp?secret=" + sentinel, { method: "POST", headers, body: "{}" })).status, 400);
   assert.equal((await f.rpc("notifications/initialized", {}, { body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) })).status, 202);
   assert.ok(f.logs.every(l => !l.includes(sentinel) && !l.includes("secret=")));
@@ -134,7 +141,7 @@ test("hosted global/conversation quotas are bounded and shared-platform IP canno
   assert.equal((await f.send(b.link, 1, 0, { "openai/session": "other-conversation" })).isError, undefined);
   assert.equal((await f.send(c.link)).isError, undefined); assert.equal((await f.send(d.link)).isError, true);
   assert.equal((await f.stats()).live.hosted.createHeadroom, 0);
-  clock += 3_600_001; assert.equal((await f.send(d.link)).isError, undefined);
+  clock += 3_600_001; const fresh = await f.start(); assert.equal((await f.send(fresh.link)).isError, undefined);
   assert.ok(!JSON.stringify(f.inspect.prepare("SELECT * FROM stats").all()).includes("private-conversation"));
   assert.ok((await f.stats()).live.hosted.conversations <= 3);
 });
@@ -153,4 +160,59 @@ test("capabilities never fetch model hosts, wrong keys/replay sanitized, no key/
   assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM sessions").get().n, 1);
   assert.equal((await f.call("grill_cancel", { link: s.link })).structuredContent.status, "CANCELLED");
   assert.equal((await f.call("grill_wait", { link: s.link, round: 1, seconds: 1 })).structuredContent.reason, "cancelled");
+});
+
+test("actual lost answer/ACK response sockets retain recoverability; no automatic network delivery ACK", async t => {
+  const f = await fixture(t), s = await f.start(); await f.send(s.link); await f.answer(s.link, 1, 1);
+  const proxy = http.createServer((req, res) => {
+    const upstream = http.request(f.base + "/mcp", { method: "POST", headers: req.headers }, incoming => {
+      // Drop ONLY after a real tool response has been produced. SSE comments may be read,
+      // but the result/ACK JSON is lost; no relay/model handler or crypto is mocked.
+      incoming.on("data", chunk => { if (chunk.toString().includes('"jsonrpc"')) { res.destroy(); upstream.destroy(); }
+        else { if (!res.headersSent) res.writeHead(200, incoming.headers); res.write(chunk); } });
+      incoming.on("end", () => res.end());
+    });
+    upstream.on("error", () => res.destroy()); req.pipe(upstream); res.on("close", () => upstream.destroy());
+  });
+  await new Promise(r => proxy.listen(0, "127.0.0.1", r));
+  t.after(() => { proxy.closeAllConnections(); proxy.close(); });
+  const lose = async (name, args) => {
+    await assert.rejects(async () => {
+      const r = await fetch(`http://127.0.0.1:${proxy.address().port}/mcp`, { method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
+      await r.text();
+    });
+  };
+  await lose("grill_wait", { link: s.link, round: 1, seconds: 1 });
+  const ids = parseSessionLink(s.link);
+  assert.ok(f.inspect.prepare("SELECT ans_ct FROM sessions WHERE id=?").get(ids.id).ans_ct);
+  const received = (await f.call("grill_wait", { link: s.link, round: 1, seconds: 1 })).structuredContent;
+  assert.equal(received.answers, "Q1 - agree");
+  await lose("grill_ack", { link: s.link, receipt: received.receipt });
+  assert.equal(f.inspect.prepare("SELECT state FROM sessions WHERE id=?").get(ids.id).state, "idle");
+  assert.equal((await f.call("grill_ack", { link: s.link, receipt: received.receipt })).structuredContent.status, "ACKNOWLEDGED");
+});
+
+test("chunked oversized and invalid UTF8 bodies are clean rejected HTTP, without unsafe echoes", async t => {
+  const f = await fixture(t);
+  const raw = data => new Promise((resolve, reject) => {
+    const req = http.request(f.base + "/mcp", { method: "POST", headers: { ...headers, "transfer-encoding": "chunked" } }, res => {
+      const chunks = []; res.on("data", c => chunks.push(c)); res.on("end", () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString() }));
+    }); req.on("error", reject); req.write(data); req.end();
+  });
+  assert.equal((await raw(Buffer.alloc(33000, 65))).status, 413);
+  const bad = await raw(Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x3a, 0x31, 0x7d])); assert.equal(bad.status, 400);
+  assert.ok(!bad.text.includes("\ufffd"));
+});
+
+test("stateless preparation expires before publish; an ancient round1 retry cannot resurrect a pruned session", async t => {
+  let clock = Date.now(); const f = await fixture(t, { now: () => clock, ttlMs: 1000 });
+  const cap = await f.start(); await f.send(cap.link); clock += 1001;
+  assert.equal((await f.call("grill_wait", { link: cap.link, round: 1, seconds: 1 })).structuredContent.reason, "expired");
+  clock += 600_001;
+  assert.equal((await f.send(cap.link)).structuredContent.status, "ENDED");
+  assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM sessions").get().n, 0);
+  const unpublished = await f.start(); clock += 600_001;
+  assert.equal((await f.send(unpublished.link)).structuredContent.status, "ENDED");
+  assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM sessions").get().n, 0);
 });

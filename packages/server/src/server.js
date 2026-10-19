@@ -1,5 +1,6 @@
 // The Grill Me server: encrypted grills in SQLite, a long poll for answers, and the static
-// page. It stores only ciphertext; the key never reaches it (it lives in the link's #fragment).
+// page. Relay storage is ciphertext-only. Local-mode keys never reach it; hosted app tools
+// receive keys/plaintext transiently within a call, with no readable persistence or logging.
 //
 // Metrics: daily counters and bucket counters only — never content, IPs, ids, link parts or
 // user agents verbatim, and never one row per grill.

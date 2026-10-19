@@ -1,7 +1,8 @@
 # Grill Me
 
-> Grill Me turns your agent's questions into swipe cards on your phone; the answers go straight back into the agent's session, end-to-end encrypted.
+> Grill Me turns your agent's questions into swipe cards on your phone, reusing one link throughout the interview. Local mode encrypts on your device; hosted app mode handles plaintext and keys transiently and persists only encrypted current-round content.
 
 ## Install
 
 - [Install Grill Me](https://grill-me.ai/install): the install guide for AI agents
+- Hosted custom MCP endpoint: https://grill-me.ai/mcp (no authentication; account/client policies apply).

@@ -1,5 +1,31 @@
 # Grill Me acceptance checklist
 
+## Hosted app update —2026-10-19
+
+The historical0.1 checklist below is not a new installation/release approval gate.
+The owner chose0.2 as the first public release; actual Claude Code WebFetch remains
+unverified and owner-waived. Existing approved local interview/phone behavior is unchanged.
+
+M4b adds the custom hosted endpoint `https://grill-me.ai/mcp`, without an npm installation.
+See [the hosted protocol and current official setup references](HOSTED-MCP.md) and
+[install steps](../site/install.md). SDK/HTTP/browser evidence is separate from actual app
+account setup or model selection. Claude web/Desktop/mobile is documented; ChatGPT web
+custom-plugin access is subject to account/workspace policies. ChatGPT mobile/desktop
+support is not claimed. Directory submission is not part of this release.
+
+Acceptance records must distinguish transport tests, scripted phone gestures and actual
+account/model behavior. For hosted interviews test six tools: start capability, same-link
+publish, wait, explicit receipt-bound ACK, finish and cancel. Returning an answer over SSE
+must never clear it; retry/lost output retains answers until an explicit subsequent ACK.
+No private interview link, key, plaintext question or answer belongs in a public report.
+
+Hosted mode handles plaintext/key transiently on our server; only encrypted current-round
+data persists. Local clients keep their existing encryption/delivery guarantees and their
+original frozen artifact build provenance. Deployment and app-account acceptance are
+recorded against the final candidate, not inferred from these setup instructions.
+
+## Historical checklist (not current rollout status)
+
 **2026-10-18: 0.1.0 is NOT released. Release, merges and publishing remain on HOLD
 for corrected production/device acceptance.** Local UI source and final CSS review are
 accepted; measured Hub comparisons are present locally, and the production/device
@@ -59,8 +85,8 @@ in milestones 1–4 (M4b is separate).
 | Codex IDE local MCP | Actual stdio transport **TESTED**; IDE installation, tool discovery and roundtrip **PENDING**. The IDE extension uses local MCP, not the plugin. |
 | Claude Desktop local `.mcpb` | Bundled local MCP transport has technical evidence; actual GUI download/open/install/tool discovery/roundtrip **PENDING**. |
 | Other stdio MCP clients | Transport **TESTED**; acceptance for each named client/version **PENDING**. |
-| claude.ai / Claude mobile hosted connector | **NOT AVAILABLE IN 0.1.0**: M4b hosted connector is not implemented. |
-| ChatGPT web/mobile hosted MCP | **NOT AVAILABLE IN 0.1.0**: M4b is not implemented. This checklist makes no promise of ChatGPT mobile support. |
+| Claude web/Desktop/mobile hosted connector | M4b implemented; transport/scripted-phone evidence and actual account/model acceptance are recorded separately in the hosted update above. |
+| ChatGPT web custom MCP | M4b implemented; account/workspace access and actual model selection require observation. No mobile/desktop support claim. |
 
 Other historical candidate 624 evidence: real Chrome 155, 390 × 844 touch viewport,
 passed transport, resume and browser error scenarios with zero page errors; actual Codex guide reading

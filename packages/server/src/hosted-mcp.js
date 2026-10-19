@@ -2,13 +2,14 @@
 // results or exceptions; persistent storage belongs exclusively to the encrypted relay.
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
-import { convert, validateGrill, answerLines, newId, newSecret, isId } from "../../core/src/index.js";
+import { convert, validateGrill, answerLines, newSecret, isId } from "../../core/src/index.js";
 import { parseSessionLink, makeSessionLink, sealRound, openRound, openRoundAnswers, deriveSessionKeys, validateRound } from "../../core/src/session.js";
 import { GRILL_SCHEMA } from "../../core/src/format.js";
 
 const ORIGIN = "https://grill-me.ai";
 const ORIGINS = new Set([ORIGIN, "https://claude.ai", "https://chatgpt.com"]);
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
+const PREPARE_MS = 600_000;
 const UPSTREAM = readFileSync(new URL("../../core/src/grilling.md", import.meta.url), "utf8");
 export const HOSTED_INSTRUCTIONS =
   "Grill Me interviews: call grill_start once, retain its private link; grill_send publishes each explicit round on that same link. Show every question in full, then 'Grill it on your phone' and the link. grill_wait returns answers without clearing them. Only AFTER receiving and retaining the answer lines, call grill_ack with the exact receipt; then publish the next round or grill_finish. WAITING: repeat wait. Retry uncertain writes with the same arguments. Never ACK before receiving answers. " +
@@ -23,7 +24,7 @@ const annotations = { readOnlyHint: false, destructiveHint: false, idempotentHin
 const def = (name, description, properties, required, extra = {}) => ({ name, title: name.replaceAll("_", " "), description,
   inputSchema: { type: "object", properties, required, additionalProperties: false }, annotations: { ...annotations, ...extra } });
 const TOOLS = [
-  def("grill_start", "Allocate a private capability for a NEW interview before publishing any questions. No questions are stored by this step. Retain the returned link and reuse it for every round. A lost start reply has not published anything; start again only if you never received a link.", {}, [], { idempotentHint: false }),
+  def("grill_start", "Allocate a private capability for a NEW interview before publishing any questions. No questions are stored by this step. Retain the returned link and reuse it for every round. A lost start reply has not published anything; start again only if you never received a link.", {}, [], { readOnlyHint: true, idempotentHint: false }),
   def("grill_send", "Publish a ready frontier in Matt Pocock's format using the saved link, explicit round and idle expectedRevision (0 for first round). Pass exactly one of grill or text. Show ALL questions in chat, then Grill it on your phone plus link. On uncertain output retry EXACT same arguments/link/round; do not start again. Never replace a pending round or uncollected answers.", {
     link: linkField, round: field("Explicit round:1 first, then current+1.", "integer"), expectedRevision: field("0 on first publish, then exact idle revision from ACK.", "integer"),
     grill: GRILL_SCHEMA, text: field("Complete frontier in the unchanged original Matt grilling text format."), title: field("Optional interview name."),
@@ -62,12 +63,37 @@ function capability(link) {
 }
 function validateArgs(tool, a) {
   const schema = tool.inputSchema;
-  if (!object(a) || Object.keys(a).some(k => !(k in schema.properties)) || schema.required.some(k => !(k in a))) fail("INPUT");
+  if (!object(a) || Object.keys(a).some(k => !Object.hasOwn(schema.properties, k)) || schema.required.some(k => !Object.hasOwn(a, k))) fail("INPUT");
   if (a.round !== undefined && !validateRound(a.round)) fail("INPUT");
   if (a.expectedRevision !== undefined && (!Number.isInteger(a.expectedRevision) || a.expectedRevision < 0 || a.expectedRevision > 2147483647)) fail("INPUT");
   if (a.seconds !== undefined && (!Number.isInteger(a.seconds) || a.seconds < 1 || a.seconds > 50)) fail("INPUT");
+  if (tool.name === "grill_send" && (a.round === 1 ? a.expectedRevision !== 0 : a.expectedRevision < 1)) fail("INPUT");
+  if (tool.name === "grill_finish" && a.expectedRevision < 1) fail("INPUT");
   if (a.receipt !== undefined && (!object(a.receipt) || Object.keys(a.receipt).sort().join() !== "expectedRevision,round,submissionId" ||
     !validateRound(a.receipt.round) || !Number.isInteger(a.receipt.expectedRevision) || a.receipt.expectedRevision < 1 || a.receipt.expectedRevision > 2147483647 || !isId(a.receipt.submissionId))) fail("INPUT");
+}
+
+// Drain oversized bodies rather than destroying the request before its413 can be read.
+// Also bound a slow upload independently of the later tool/wait budget.
+function readMessage(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = []; let bytes = 0, over = false, done = false;
+    const finish = (error, value) => {
+      if (done) return; done = true; clearTimeout(timer);
+      req.off("data", data); req.off("end", end); req.off("error", errorEvent); req.off("aborted", aborted);
+      if (error) { chunks.length = 0; req.resume(); reject(Object.assign(new Error("body rejected"), { status: error })); }
+      else resolve(value);
+    };
+    const data = c => { bytes += c.length; if (bytes > 32768) { over = true; chunks.length = 0; } else if (!over) chunks.push(c); };
+    const end = () => {
+      if (over) return finish(413);
+      try { finish(null, JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)))); }
+      catch { finish(400); }
+    };
+    const errorEvent = () => finish(400), aborted = () => finish(400);
+    const timer = setTimeout(() => finish(408), 15_000); timer.unref();
+    req.on("data", data); req.once("end", end); req.once("error", errorEvent); req.once("aborted", aborted);
+  });
 }
 
 export function createHostedMcp({ relay, stat, now = Date.now, version, limits = {} }) {
@@ -95,8 +121,16 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
   const ended = r => out("ENDED", { reason: ["finished", "cancelled", "expired"].includes(r.body?.reason) ? r.body.reason : "unknown" });
   const check = r => { if (r.status === 429) fail("LIMIT"); if (r.status === 403 || r.status === 401) fail("CAPABILITY"); if (r.status === 409) fail("CONFLICT"); if (r.status >= 400) fail("UNAVAILABLE"); return r; };
   async function call(name, args, ctx) {
-    if (name === "grill_start") return out("PREPARED", { link: makeSessionLink(newId(), newSecret(), ORIGIN), round: 1, expectedRevision: 0,
-      message: "Capability allocated only; no questions published. Retain this link and call grill_send with round1/expectedRevision0." });
+    if (name === "grill_start") {
+      // A stateless initial-publication lease fits the existing16-char id. It prevents a
+      // very late round1 retry resurrecting an ended session after its reason receipt was
+      // pruned, without adding tombstones/history or persisting any preparation secret.
+      const bytes = crypto.randomBytes(12), issued = Math.floor(now() / 1000);
+      bytes.writeUInt32BE(issued, 0);
+      return out("PREPARED", { link: makeSessionLink(bytes.toString("base64url"), newSecret(), ORIGIN), round: 1, expectedRevision: 0,
+        publishBefore: issued * 1000 + PREPARE_MS,
+        message: "Capability allocated only; no questions published. Retain this link and publish round1/revision0 within10minutes. Published sessions retain their normal refreshed1hour expiry." });
+    }
     const ids = capability(args.link), keys = await deriveSessionKeys(ids.secret);
     const invoke = (operation, body, round, wait = 0) => relay({ operation, id: ids.id, keys, body, round, wait, signal: ctx.signal, agent: ctx.agent });
     const snapshot = await invoke("snapshot");
@@ -121,6 +155,8 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
       else {
         if (snapshot.status === 404) {
           if (snapshot.body?.reason || args.round !== 1 || args.expectedRevision !== 0) return ended(snapshot);
+          const issuedAt = Buffer.from(ids.id, "base64url").readUInt32BE(0) * 1000;
+          if (issuedAt > now() + 1000 || now() >= issuedAt + PREPARE_MS) return ended(snapshot);
           reserve(ids.id, ctx.conversation);
         } else if (snapshot.body.state !== "idle" || args.round !== snapshot.body.round + 1 || args.expectedRevision !== snapshot.body.revision) fail("CONFLICT");
         const blob = await sealRound(grill, { ...ids, round: args.round });
@@ -139,9 +175,7 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
     if (name === "grill_wait") {
       if (snapshot.body.round !== args.round) fail("CONFLICT");
       if (snapshot.body.state === "idle") return out("IDLE", { round: args.round, revision: snapshot.body.revision });
-      if (waits >= maxWaits) { stat("hosted_rejected", "waits"); fail("LIMIT"); }
-      waits++;
-      try {
+      {
         const r = await invoke("answers", null, args.round, (args.seconds ?? 45));
         if (r.status === 404) return ended(r); check(r);
         if (r.status === 204) return out("WAITING", { round: args.round });
@@ -150,7 +184,7 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
         const answers = await openRoundAnswers(r.body, grill, { ...ids, round: args.round });
         return out("ANSWERS", { answers: answerLines(grill, answers), receipt: { round: args.round, expectedRevision: r.body.revision, submissionId: r.body.submissionId },
           message: "Retain these answers, then call grill_ack with this exact receipt. Nothing has been cleared yet." });
-      } finally { waits--; }
+      }
     }
     const body = name === "grill_ack" ? { expectedRevision: args.receipt.expectedRevision, submissionId: args.receipt.submissionId } : { expectedRevision: args.expectedRevision };
     const operation = name === "grill_ack" ? "ack" : name === "grill_finish" ? "finish" : "cancel";
@@ -164,48 +198,61 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
   }
 
   async function handle(req, res, url) {
+    const receivedAt = performance.now();
     const headers = { "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; frame-ancestors 'none'" };
-    const reply = (status, value) => { res.writeHead(status, headers); res.end(value === undefined ? undefined : JSON.stringify(value)); };
+    const reply = (status, value) => { if (status >= 400) { req.resume(); res.setHeader("connection", "close"); }
+      res.writeHead(status, headers); res.end(value === undefined ? undefined : JSON.stringify(value)); };
     if (url.search) return reply(400, rpcError(null, -32600, "MCP URL must not contain query parameters"));
     if (req.headers.origin !== undefined && !ORIGINS.has(req.headers.origin)) { stat("hosted_rejected", "origin"); return reply(403); }
     if (req.method !== "POST") { res.setHeader("allow", "POST"); return reply(405); }
     if (req.headers["mcp-session-id"] !== undefined || (req.headers["mcp-protocol-version"] !== undefined && !VERSIONS.includes(req.headers["mcp-protocol-version"]))) return reply(400);
-    const accept = String(req.headers.accept ?? "").toLowerCase().split(",").map(s => s.trim().split(";")[0]);
+    const accept = String(req.headers.accept ?? "").toLowerCase().split(",").filter(s => {
+      const q = /;\s*q\s*=\s*([\d.]+)/.exec(s); return !q || (Number(q[1]) > 0 && Number(q[1]) <= 1);
+    }).map(s => s.trim().split(";")[0].trim());
     if (!accept.includes("application/json") || !accept.includes("text/event-stream")) return reply(406);
     if (!/^application\/json(?:\s*;|$)/i.test(req.headers["content-type"] ?? "")) return reply(415);
     let message;
     try {
-      const chunks = []; let size = 0;
       if (Number(req.headers["content-length"] || 0) > 32768) return reply(413);
-      for await (const c of req) { size += c.length; if (size > 32768) { reply(413); return; } chunks.push(c); }
-      message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    } catch { return reply(400, rpcError(null, -32700, "Invalid JSON")); }
+      message = await readMessage(req);
+    } catch (e) { return reply(e.status ?? 400, rpcError(null, -32700, "Invalid or incomplete JSON body")); }
     if (!object(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string" ||
       ("id" in message && !(typeof message.id === "string" && message.id.length <= 128 || Number.isSafeInteger(message.id))) ||
       (message.params !== undefined && !object(message.params))) return reply(400, rpcError(null, -32600, "Invalid JSON-RPC request"));
     if (!("id" in message)) return ["notifications/initialized", "notifications/cancelled"].includes(message.method) ? reply(202) : reply(400);
     const { id, params = {}, method } = message;
-    if (method === "initialize") return reply(200, response(id, { protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : VERSIONS[0],
-      capabilities: { tools: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS }));
+    if (method === "initialize") {
+      if (typeof params.protocolVersion !== "string" || !params.protocolVersion || params.protocolVersion.length > 64 || !object(params.capabilities) ||
+        !object(params.clientInfo) || typeof params.clientInfo.name !== "string" || !params.clientInfo.name || params.clientInfo.name.length > 200 ||
+        typeof params.clientInfo.version !== "string" || !params.clientInfo.version || params.clientInfo.version.length > 100)
+        return reply(200, rpcError(id, -32602, "Invalid initialization parameters"));
+      return reply(200, response(id, { protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : VERSIONS[0],
+        capabilities: { tools: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS }));
+    }
     if (method === "ping") return reply(200, response(id, {}));
     if (method === "tools/list") return reply(200, response(id, { tools: TOOLS }));
     if (method !== "tools/call") return reply(200, rpcError(id, -32601, "Method not found"));
     const tool = TOOLS.find(t => t.name === params.name);
     if (!tool) return reply(200, rpcError(id, -32602, "Unknown tool"));
-    let args = params.arguments ?? {};
+    let args = params.arguments === undefined ? {} : params.arguments;
     try { validateArgs(tool, args); } catch { return reply(200, response(id, { isError: true, content: [{ type: "text", text: safeMessages.INPUT }] })); }
     const controller = new AbortController(); controllers.add(controller);
     const budget = tool.name === "grill_wait" ? (args.seconds ?? 45) * 1000 : 15_000;
-    const deadline = performance.now() + budget;
-    const timer = setTimeout(() => controller.abort(), budget); timer.unref();
+    const deadline = receivedAt + budget;
+    const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - performance.now())); timer.unref();
     const disconnect = () => controller.abort(); res.once("close", disconnect);
     const sse = tool.name === "grill_wait";
     if (sse) { res.writeHead(200, { ...headers, "content-type": "text/event-stream", "x-accel-buffering": "no" }); res.flushHeaders(); res.write(": connected\n\n"); }
     const keepalive = sse ? setInterval(() => { if (!res.destroyed) res.write(": keepalive\n\n"); }, 10_000) : null;
     keepalive?.unref();
-    let abortListener;
+    let abortListener, ownsWait = false;
     try {
+      if (performance.now() >= deadline) { controller.abort(); throw new Error("aborted"); }
+      if (sse) {
+        if (waits >= maxWaits) { stat("hosted_rejected", "waits"); fail("LIMIT"); }
+        waits++; ownsWait = true;
+      }
       const rawConversation = params._meta?.["openai/session"];
       const conversation = typeof rawConversation === "string" && rawConversation.length > 0 && rawConversation.length <= 512
         ? crypto.createHash("sha256").update(rawConversation).digest("hex") : null;
@@ -213,7 +260,11 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
         call(tool.name, args, { signal: controller.signal, deadline, conversation, agent: /claude/i.test(req.headers["user-agent"] ?? "") ? "claude-ai" : /chatgpt|openai/i.test(req.headers["user-agent"] ?? "") ? "chatgpt" : "other" }),
         new Promise((_, reject) => { abortListener = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })); controller.signal.addEventListener("abort", abortListener, { once: true }); }),
       ]);
-      const text = value.status === "ANSWERS" ? `${value.answers}\nSTATUS: ANSWERS\n${value.message}` : `STATUS: ${value.status}\n${value.message ?? ""}${value.link ? "\nGrill it on your phone\n" + value.link : ""}`;
+      // Some hosts expose only text content to their model. Include the exact capability,
+      // state and ACK receipt there as well as structuredContent; PREPARED is never ready.
+      const text = value.status === "ANSWERS" ? `${value.answers}\nSTATUS: ANSWERS\nACK receipt: ${JSON.stringify(value.receipt)}\n${value.message}`
+        : `STATUS: ${value.status}\n${JSON.stringify(value)}${value.status === "PREPARED" ? "\nPrivate capability only: publish the first round before showing the phone as ready." : ""}` +
+          (value.status === "READY" ? "\nShow the complete questions, then:\nGrill it on your phone\n" + value.link : "");
       const body = response(id, { content: [{ type: "text", text }], structuredContent: value });
       if (!res.destroyed) sse ? res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`) : reply(200, body);
     } catch (e) {
@@ -225,6 +276,7 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
     } finally {
       clearTimeout(timer); if (keepalive) clearInterval(keepalive);
       controller.signal.removeEventListener("abort", abortListener); res.off("close", disconnect);
+      if (ownsWait) waits--;
       controller.abort(); controllers.delete(controller); args = null; message = null;
     }
   }

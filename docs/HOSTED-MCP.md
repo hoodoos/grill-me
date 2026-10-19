@@ -9,6 +9,10 @@ only the existing encrypted current-round relay persists content. Local mode is 
 1. `grill_start({})` returns `PREPARED`, `link`, `round:1`, `expectedRevision:0`.
    It creates no relay row. Retain this capability BEFORE publishing. If this allocation
    reply is lost, no questions have been published and allocating another is harmless.
+   Preparation is valid for10minutes before first publication (`publishBefore`). Its
+   issue time is encoded in the existing opaque id, not retained in a preparation table.
+   Once published, ordinary refreshed1hour session expiry applies. A very late first-round
+   retry cannot recreate a dead interview after its10minute end receipt has been pruned.
 2. `grill_send({link,round,expectedRevision,grill? | text?,title?})` publishes a frontier.
    Show its complete questions, then “Grill it on your phone” and the link. All rounds
    reuse this link. First round uses revision0; later rounds require the current idle
@@ -47,7 +51,11 @@ bounded body/strict JSON-RPC; GET/DELETE405, notifications202, no batch/session 
 Client response closure aborts work and frees waiters. Errors never echo tool names,
 unknown methods, arguments, exception text or links. Only outer `/mcp` status/latency is
 logged. Exact nginx location disables access/error logs, rejects query parameters,
-proxies with buffering off and75s upstream timeout. Other locations remain unchanged.
+proxies with response AND request buffering off, HTTP1.1,32KB client body buffer,
+`client_body_in_file_only off`,15s body inactivity timeout and75s upstream timeout.
+The Node upload reader also has a15s wall deadline and32KB cap, drains oversized bodies
+and rejects malformed UTF8. This prevents plaintext/key request bodies spooling to nginx
+temporary files. Other locations remain unchanged.
 
 Hosted tool definitions/instructions are server-only. The complete pinned original Matt
 skill is read unchanged into initialize instructions; the first512characters contain the
@@ -56,3 +64,20 @@ remain byte-identical; website/deployment source binding advances independently.
 
 Actual Claude/ChatGPT account setup and model behavior require separate observation after
 deployment. SDK/HTTP/Chrome tests establish transport/phone behavior, not account support.
+
+## Current official setup references (checked2026-10-19)
+
+- [ChatGPT custom MCP guide](https://developers.openai.com/api/docs/guides/custom-mcp-server)
+  and [plugin quickstart](https://developers.openai.com/plugins/quickstart): ChatGPT web,
+  Plugins → plus → Add custom MCP server → No authentication → Create as a plugin.
+  Install the personal plugin, use a new Work chat and select it with `@`. Account/workspace
+  policies apply. Do not infer ChatGPT mobile/desktop or a particular plan from this.
+- [Claude custom connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp):
+  Customize/Settings → Connectors → Add custom connector, URL `/mcp`, No sign in.
+  Individual/workspace controls differ. Requests come from Claude's cloud across web,
+  Desktop and mobile; local Desktop stdio is a different mode.
+- [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+
+Custom connection only: no public-directory submission. No npm publish prerequisite for
+the hosted endpoint. Actual app-account connection/tool selection remains separately
+unverified until observed; no model API key or paid API call is used for transport tests.
