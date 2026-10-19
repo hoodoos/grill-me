@@ -85,10 +85,17 @@ export function createAnswerEvents({ dbh, db, now, stat, options = {} }) {
     if (!row || row.state !== "answered" || row.expires_at <= now()) return;
     const sub = get.get(row.id);
     if (!sub || sub.expires_at <= now() || !safeEqual(sub.auth_hash, row.write_hash)) return;
+    const eventId = "evt_" + crypto.createHmac("sha256", key).update(JSON.stringify([sub.id, row.id, row.round, row.revision, row.sub_id])).digest("base64url").slice(0, 32);
     dbh.prepare(`INSERT OR IGNORE INTO event_outbox(event_id,subscription_id,session_id,round,revision,submission_id,occurred_at,expires_at,next_at)
-      VALUES(?,?,?,?,?,?,?,?,?)`).run("evt_" + random(), sub.id, row.id, row.round, row.revision, row.sub_id, now(), Math.min(sub.expires_at, row.expires_at), now());
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(eventId, sub.id, row.id, row.round, row.revision, row.sub_id, now(), Math.min(sub.expires_at, row.expires_at), now());
   };
-  const bind = row => { dbh.prepare("UPDATE event_subscriptions SET bound=1 WHERE session_id=? AND auth_hash=?").run(row.id, row.write_hash); };
+  const bind = row => {
+    const prepared = get.get(row.id);
+    // The real first create establishes authority: an unrelated guessed-id preparation
+    // cannot reserve this owner's subscription namespace with a different capability.
+    if (prepared && !safeEqual(prepared.auth_hash, row.write_hash)) remove(row.id);
+    dbh.prepare("UPDATE event_subscriptions SET bound=1 WHERE session_id=? AND auth_hash=?").run(row.id, row.write_hash);
+  };
   const limits = { subscriptions: options.subscriptions ?? 1000, concurrent: options.concurrent ?? 4, registrations: options.registrations ?? 300 };
   const registrations = new Map(), controllers = new Set(), intents = new Map(); let active = 0, closed = false;
   const rate = id => {
@@ -115,7 +122,7 @@ export function createAnswerEvents({ dbh, db, now, stat, options = {} }) {
     const url = callbackUrl(delivery.url).href; signingKey(delivery.secret);
     if (ttlMs !== undefined && ttlMs !== null && (!Number.isSafeInteger(ttlMs) || ttlMs < 1)) invalid();
     if (provider === "grok" && (typeof contextReference !== "string" || !contextReference || contextReference.length > 512)) invalid();
-    prune(); rate(sessionId); authorize(sessionId, authHash, preparedUntil);
+    prune(); authorize(sessionId, authHash, preparedUntil); rate(sessionId);
     const before = get.get(sessionId), old = before && safeEqual(before.auth_hash, authHash) ? open(before) : null;
     const id = "sub_" + crypto.createHmac("sha256", key).update(JSON.stringify([authHash, sessionId, EVENT_NAME, url, provider])).digest("base64url").slice(0, 32);
     if (before && before.id !== id) throw new CallbackError("conflict");

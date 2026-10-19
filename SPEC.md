@@ -25,7 +25,7 @@ rounds, retains current state only, and preserves the 0.1.0 one-shot paths descr
 - **Any question format in, one internal format out.**
 - **Cheap to run.** One small Node server.
 
-Not goals: accounts, history, sharing grills with other people, push notifications (that's Agent Hub).
+Not goals: accounts, history, sharing grills with other people, general-purpose push notifications (that's Agent Hub). Bounded answer-ready host callbacks continue the current interview without a chat nudge; they do not create a history service.
 
 ## How it works
 
@@ -290,6 +290,14 @@ transport contract is [docs/HOSTED-MCP.md](docs/HOSTED-MCP.md).
   `grill_wait` returns answers without clearing them; `grill_ack` confirms actual model receipt
   with the unchanged original round/revision/submission receipt; `grill_finish` requires idle;
   `grill_cancel` explicitly aborts. Network response completion is never treated as model receipt.
+- Automatic host continuation is additive: modern MCP2.0 `2026-07-28` per-request discovery,
+  tools and events coexist with legacy2025 clients. Native `grill.answers_ready` callbacks
+  can wake the SAME subscribed ChatGPT chat. Two extra server-only Grok adapter tools
+  `grill_subscribe`/`grill_unsubscribe` do not claim old-chat resume; each fresh run must
+  read/update host-owned durable context before an ACK checkpoint receipt. See
+  [docs/ANSWER-EVENTS.md](docs/ANSWER-EVENTS.md) for exact schemas, provider limitations,
+  transaction/race/retry/security bounds, current-only encrypted callback storage and
+  persistent0600 DATA key. No packaged local files or Matt workflow change.
 - Randomized AES-GCM/v2 session+round+slot AAD stays unchanged. Keyed canonical-input publish
   identities allow exact lost-reply/concurrent retry without replacing pending content.
   The private key/plaintext exists transiently in a call; no readable persistence, local

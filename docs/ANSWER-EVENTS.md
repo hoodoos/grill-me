@@ -49,7 +49,7 @@ The sealed configuration contains callback URL/signing keys and, for Grok, conte
 reference/current checkpoint revision and exact latest ACK checkpoint digest. No interview
 body, questions, answers, phone secret/link or design tree is stored here.
 
-`event_outbox`: subscription ID, stable random event ID, session ID, round/revision/
+`event_outbox`: subscription ID, stable opaque event ID (keyed over subscription/winner), session ID, round/revision/
 submission ID, occurrence time, expiry, attempts/next attempt/lease/delivered state. At
 most one current event per subscription/round. Winning answer CAS and outbox enqueue
 commit in one SQLite transaction; losers/retries enqueue nothing. Register-vs-answer

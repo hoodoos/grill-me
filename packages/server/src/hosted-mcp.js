@@ -282,11 +282,11 @@ export function createHostedMcp({ relay, events, stat, now = Date.now, version, 
         if (!res.destroyed) reply(200, response(id, result));
       } catch (e) {
         const reason = ["timeout", "challenge_failed", "blocked_address", "network", "redirect", "response_limit", "capacity", "conflict"].includes(e.reason) ? e.reason : "invalid_subscription";
-        if (!res.destroyed) reply(200, { jsonrpc: "2.0", id, error: { code: -32015, message: "Callback subscription unavailable", data: { reason } } });
+        if (!res.destroyed) reply(200, { jsonrpc: "2.0", id, error: { code: reason === "invalid_subscription" ? -32602 : -32015, message: "Callback subscription unavailable", data: { reason } } });
       } finally { clearTimeout(timer); res.off("close", disconnect); controller.abort(); controllers.delete(controller); }
       return;
     }
-    if (modern && method === "initialize") return reply(404, rpcError(id, -32601, "Method not found"));
+    if (modern && ["initialize", "ping"].includes(method)) return reply(404, rpcError(id, -32601, "Method not found"));
     if (method === "initialize") {
       if (typeof params.protocolVersion !== "string" || !params.protocolVersion || params.protocolVersion.length > 64 || !object(params.capabilities) ||
         !object(params.clientInfo) || typeof params.clientInfo.name !== "string" || !params.clientInfo.name || params.clientInfo.name.length > 200 ||

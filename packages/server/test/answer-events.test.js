@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createServer } from "../src/server.js";
 import { publicAddress, callbackUrl, callbackPost, signingKey, safeEqual } from "../src/callback-transport.js";
 import { parseSessionLink, deriveSessionKeys, sealRoundAnswers } from "../../core/src/session.js";
-import { newId } from "../../core/src/index.js";
+import { newId, newSecret } from "../../core/src/index.js";
 
 const headers = { accept: "application/json, text/event-stream", "content-type": "application/json" };
 const protocol = "2026-07-28", prefix = "io.modelcontextprotocol/";
@@ -38,10 +38,10 @@ async function fixture(t, eventOptions = {}, options = {}) {
   await launch(); const inspect = new DatabaseSync(db);
   t.after(async () => { srv.server.closeAllConnections(); await srv.close(); inspect.close(); await fs.rm(dir, { recursive: true, force: true }); });
   let sequence = 0;
-  const rpc = async (method, params = {}, modern = true, extraHeaders = {}) => {
+  const rpc = async (method, params = {}, modern = true, extraHeaders = {}, fetchOptions = {}) => {
     const values = modern ? { ...params, _meta: { ...meta, ...params._meta } } : params;
     const r = await fetch(base + "/mcp", { method: "POST", headers: { ...headers, ...(modern ? { "mcp-protocol-version": protocol, "mcp-method": method, ...(method === "tools/call" ? { "mcp-name": params.name } : {}) } : {}), ...extraHeaders },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++sequence, method, params: values }) });
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++sequence, method, params: values }), ...fetchOptions });
     return { status: r.status, body: parse(await r.text()) };
   };
   const call = async (name, args = {}, modern = true) => (await rpc("tools/call", { name, arguments: args }, modern)).body.result;
@@ -69,6 +69,8 @@ test("actual modern HTTP envelopes/headers/discovery coexist with legacy initial
   assert.equal(tools.cacheScope, "public"); assert.equal(tools.resultType, "complete"); assert.equal(tools.tools.length, 8);
   const init = await f.rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "legacy", version: "1" } }, false);
   assert.equal(init.body.result.protocolVersion, "2025-11-25"); assert.equal(init.body.result.resultType, undefined);
+  assert.equal((await f.rpc("ping", {}, false)).status, 200);
+  assert.equal((await f.rpc("ping")).status, 404, "modern protocol removed legacy ping");
   assert.equal((await f.rpc("tools/list", {}, false)).body.result.tools.length, 8);
   for (const [params, h, code] of [
     [{}, { "mcp-method": "private_sentinel" }, -32020],
@@ -76,6 +78,8 @@ test("actual modern HTTP envelopes/headers/discovery coexist with legacy initial
     [{ _meta: { [prefix + "protocolVersion"]: "2027-01-01" } }, { "mcp-protocol-version": "2027-01-01" }, -32022],
   ]) { const r = await f.rpc("tools/list", params, true, h); assert.equal(r.status, 400); assert.equal(r.body.error.code, code); assert.ok(!JSON.stringify(r.body).includes("private_sentinel")); }
   const mismatch = await f.rpc("tools/call", { name: "grill_start" }, true, { "mcp-name": "wrong" }); assert.equal(mismatch.body.error.code, -32020);
+  const draft = await f.rpc("tools/list", { _meta: { [prefix + "protocolVersion"]: "draft" } }, true, { "mcp-protocol-version": "draft" });
+  assert.equal(draft.body.error.code, -32022); assert.equal(draft.body.error.data.requested, "draft"); assert.ok(draft.body.error.data.supported.includes(protocol));
   const encoded = await f.rpc("tools/call", { name: "grill_start" }, true, { "mcp-name": "=?base64?Z3JpbGxfc3RhcnQ=?=" }); assert.equal(encoded.body.result.structuredContent.status, "PREPARED");
   const unknown = await f.rpc("PRIVATE_UNKNOWN_METHOD"); assert.equal(unknown.status, 404); assert.equal(unknown.body.error.code, -32601); assert.ok(!JSON.stringify(unknown.body).includes("PRIVATE_UNKNOWN"));
 });
@@ -203,4 +207,102 @@ test("callback address/secret boundary blocks private, mapped IPv6, mixed DNS, r
     resolve: async () => { resolves++; return [{ address: "169.254.169.254", family: 4 }]; },
   }), e => e.reason === "blocked_address");
   assert.equal(resolves, 2, "resolve every connection; never use a stale validated DNS cache");
+});
+
+test("subscription refresh identity/key rotation/caps and bounded retry exhaustion/410/413", async t => {
+  const attempts = [];
+  let status = 503;
+  const f = await fixture(t, { subscriptions: 1, post: async (_url, request) => {
+    const body = JSON.parse(request.body);
+    if (body.type === "verification") return { status: 200, body: JSON.stringify({ challenge: body.challenge }) };
+    attempts.push(request); return { status, body: "" };
+  } });
+  const cap = await f.start(); await f.send(cap.link);
+  const first = await f.subscribe(cap.link), repeat = await f.subscribe(cap.link);
+  assert.equal(first.body.result.id, repeat.body.result.id);
+  const other = await f.start(); assert.equal((await f.subscribe(other.link)).body.error.data.reason, "capacity");
+  const rotatedSecret = "whsec_" + Buffer.alloc(32, 23).toString("base64");
+  const rotated = await f.subscribe(cap.link, { delivery: { ...delivery, secret: rotatedSecret } }); assert.equal(rotated.body.result.id, first.body.result.id);
+  await f.postAnswer(await f.blob(cap.link)); await until(() => attempts.length === 1);
+  assert.equal(attempts[0].headers["webhook-signature"].split(" ").length, 2, "rotation grace signs old+new keys");
+  for (let count = 2; count <= 8; count++) {
+    await until(() => f.inspect.prepare("SELECT lease_until FROM event_outbox").get().lease_until === 0);
+    f.advance(f.inspect.prepare("SELECT next_at FROM event_outbox").get().next_at - f.now() + 1);
+    await until(() => attempts.length === count);
+  }
+  await until(() => f.inspect.prepare("SELECT state FROM event_outbox").get().state === "stopped");
+  f.advance(1000); await pause(25); assert.equal(attempts.length, 8, "bounded retries");
+  const receipt = (await f.call("grill_wait", { link: cap.link, round: 1, seconds: 1 })).structuredContent.receipt;
+  await f.call("grill_ack", { link: cap.link, receipt });
+  let rev = 3;
+  for (const stopped of [410, 413]) {
+    status = stopped; const round = stopped === 410 ? 2 : 3;
+    await f.send(cap.link, round, rev); const before = attempts.length;
+    await f.postAnswer(await f.blob(cap.link, round), round); await until(() => attempts.length === before + 1);
+    await until(() => f.inspect.prepare("SELECT state FROM event_outbox").get().state === "stopped");
+    const value = (await f.call("grill_wait", { link: cap.link, round, seconds: 1 })).structuredContent;
+    rev = (await f.call("grill_ack", { link: cap.link, receipt: value.receipt })).structuredContent.revision;
+  }
+});
+
+test("lease and subscription expiry during signed verification cannot activate or leak a callback", async t => {
+  let release, enter; const barrier = new Promise(r => { enter = r; });
+  const f = await fixture(t, { post: async (_url, request) => {
+    const body = JSON.parse(request.body); enter(); await new Promise(r => { release = r; }); return { status: 200, body: JSON.stringify({ challenge: body.challenge }) };
+  } });
+  const cap = await f.start(), pending = f.subscribe(cap.link); await barrier;
+  f.advance(600_001); release(); assert.ok((await pending).body.error);
+  assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM event_subscriptions").get().n, 0);
+});
+
+test("wrong capabilities cannot consume the authenticated session registration budget", async t => {
+  const f = await fixture(t), cap = await f.start(); await f.send(cap.link);
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const wrong = cap.link.split("#")[0] + "#" + newSecret();
+    assert.equal((await f.call("grill_subscribe", { link: wrong, url: delivery.url, secret, contextReference: "host-context" })).isError, true);
+  }
+  const valid = await f.call("grill_subscribe", { link: cap.link, url: delivery.url, secret, contextReference: "host-context" });
+  assert.equal(valid.structuredContent.status, "SUBSCRIBED"); assert.equal(f.received.length, 0);
+});
+
+test("connection abort reclaims callback slot; a pending challenge cannot create an unbounded queue", async t => {
+  let active = 0;
+  const f = await fixture(t, { concurrent: 1, post: async (_url, request) => {
+    active++;
+    try { await new Promise((_, reject) => request.signal.addEventListener("abort", () => reject(new Error("closed")), { once: true })); }
+    finally { active--; }
+  } });
+  const cap = await f.start(), other = await f.start(), controller = new AbortController();
+  const params = { name: "grill.answers_ready", arguments: { link: cap.link }, delivery };
+  const request = f.rpc("events/subscribe", params, true, {}, { signal: controller.signal });
+  const rejected = assert.rejects(request); await until(() => active === 1);
+  assert.equal((await f.subscribe(other.link)).body.error.data.reason, "capacity");
+  controller.abort(); await rejected; await until(() => active === 0);
+  assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM event_subscriptions").get().n, 0);
+});
+
+test("receiver got event but lost reply/restart retries SAME metadata without ACK or duplicate logical event", async t => {
+  const attempts = []; let loseReply = true;
+  const f = await fixture(t, { post: async (_url, request) => {
+    signed(request); const data = JSON.parse(request.body);
+    if (data.type === "verification") return { status: 200, body: JSON.stringify({ challenge: data.challenge }) };
+    attempts.push(request);
+    if (loseReply) await new Promise((_, reject) => request.signal.addEventListener("abort", () => reject(new Error("reply lost")), { once: true }));
+    return { status: 202, body: "" };
+  } });
+  const cap = await f.start(); await f.subscribe(cap.link); await f.send(cap.link); await f.postAnswer(await f.blob(cap.link));
+  await until(() => attempts.length === 1); await f.restart();
+  assert.equal(f.inspect.prepare("SELECT state FROM sessions").get().state, "answered");
+  loseReply = false; f.advance(15_001); await until(() => attempts.length === 2);
+  assert.equal(attempts[0].body, attempts[1].body); assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM event_outbox").get().n, 1);
+  assert.equal(f.inspect.prepare("SELECT state FROM sessions").get().state, "answered");
+});
+
+test("a guessed-id preparation cannot reserve the real owner's subscription after first publish", async t => {
+  const f = await fixture(t), cap = await f.start(), guessed = cap.link.split("#")[0] + "#" + newSecret();
+  const impostor = await f.call("grill_subscribe", { link: guessed, url: delivery.url, secret, contextReference: "impostor-checkpoint" });
+  assert.equal(impostor.structuredContent.status, "SUBSCRIBED");
+  await f.send(cap.link);
+  assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM event_subscriptions").get().n, 0);
+  const owner = await f.subscribe(cap.link); assert.ok(owner.body.result.id);
 });

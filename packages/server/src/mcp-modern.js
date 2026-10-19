@@ -16,12 +16,12 @@ export function modernRequest(req, message, supported) {
   const modern = bodyVersion !== undefined || headerVersion === MODERN;
   if (!modern) return { modern: false };
   const error = (code, text, data) => ({ modern: true, error: { code, message: text, ...(data ? { data } : {}) } });
-  if (!object(meta) || typeof bodyVersion !== "string" || !object(meta[PREFIX + "clientCapabilities"])) return error(-32602, "Required per-request metadata missing or malformed");
+  if (!object(meta) || typeof bodyVersion !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bodyVersion) || !object(meta[PREFIX + "clientCapabilities"])) return error(-32602, "Required per-request metadata missing or malformed");
   if (meta[PREFIX + "clientInfo"] !== undefined && (!object(meta[PREFIX + "clientInfo"]) || typeof meta[PREFIX + "clientInfo"].name !== "string" || typeof meta[PREFIX + "clientInfo"].version !== "string")) return error(-32602, "Invalid client metadata");
-  if (headerVersion !== bodyVersion || req.headers["mcp-method"] !== message.method ||
-    (["tools/call", "resources/read", "prompts/get"].includes(message.method) && headerValue(req.headers["mcp-name"]) !== (message.method === "resources/read" ? message.params.uri : message.params.name)))
+  if (headerVersion !== bodyVersion || !/^[\x21-\x7e]+$/.test(req.headers["mcp-method"] ?? "") || req.headers["mcp-method"] !== message.method ||
+    (["tools/call", "resources/read", "prompts/get"].includes(message.method) && (req.headers["mcp-name"] === undefined || headerValue(req.headers["mcp-name"]) !== (message.method === "resources/read" ? message.params.uri : message.params.name))))
     return error(-32020, "Required protocol headers missing or mismatched");
-  if (bodyVersion !== MODERN) return error(-32022, "Unsupported protocol version", { supported, ...(/^\d{4}-\d{2}-\d{2}$/.test(bodyVersion) ? { requested: bodyVersion } : {}) });
+  if (bodyVersion !== MODERN) return error(-32022, "Unsupported protocol version", { supported, requested: bodyVersion });
   return { modern: true };
 }
 export const modernResult = (result, version) => ({ ...result, resultType: "complete", _meta: { ...result._meta, [PREFIX + "serverInfo"]: { name: "grill-me-hosted", version } } });
