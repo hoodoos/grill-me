@@ -1,6 +1,6 @@
 {
   "name": "grill-me",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ask the user questions as swipe cards on their phone, end-to-end encrypted. Answers land back in the session.",
   "author": {
     "name": "hoodoos"
