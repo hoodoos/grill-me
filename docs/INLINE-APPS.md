@@ -49,9 +49,17 @@ inside a full-width bounded swipe stage. Unsupported hosts get the existing phon
 ChatGPT and Claude document MCP Apps support; Grok inline rendering remains UNVERIFIED.
 SDK/sandbox tests do not establish actual account/model behavior or hardware acceptance.
 
+The compiled HTML includes the actual LICENSE/NOTICE files for every bundled dependency
+as inert nonrendered JSON, plus retained inline legal comments. This includes the SDK's
+mixed Apache/MIT transition text rather than inferring a license from its manifest.
+
 The public compiled template is cached once/process. Resource reads are limited to four
 in flight, sixty/minute globally, with ten-second slow-reader cutoff. Private server
 dependencies are pinned; none of the frozen29 published payload bytes are changed.
+
+References: [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview),
+[ChatGPT UI](https://developers.openai.com/plugins/build/chatgpt-ui). The installed
+official2.0.3 schemas/types govern the content-array message and host capability contract.
 
 ## Current-only event timestamp correction
 

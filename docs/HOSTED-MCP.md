@@ -7,6 +7,9 @@ model-supplied URL. App mode handles keys/questions/answers transiently on the s
 only the existing encrypted current-round relay persists interview content. Local mode is unchanged.
 Optional answer-ready subscriptions persist bounded metadata and encrypted callback configuration,
 never the interview history. See [ANSWER-EVENTS.md](ANSWER-EVENTS.md) for the modern wire/storage contract.
+Optional in-chat swipe cards use the same current session through a separate read-only
+`grill_show` render tool and self-contained MCP Apps resource. See [INLINE-APPS.md](INLINE-APPS.md)
+for exact schemas, least-privilege host enforcement and honest follow-up/fallback limits.
 
 1. `grill_start({})` returns `PREPARED`, `link`, `round:1`, `expectedRevision:0`.
    The result also includes the complete unchanged Matt skill in `grillingInstructions`

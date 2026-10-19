@@ -64,7 +64,7 @@ test("actual phone swipes -> signed local receiver wake -> next frontier and fin
   await new Promise(r => srv.server.listen(0, "127.0.0.1", r)); base = `http://127.0.0.1:${srv.server.address().port}`;
   client = new Client({ name: "scripted-host-compatibility", version: "1.32.1" }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(new URL(base + "/mcp")); await client.connect(transport); assert.equal(transport.sessionId, undefined);
-  assert.equal((await client.listTools()).tools.length, 8);
+  assert.equal((await client.listTools()).tools.length, 11);
   privateLink = (await call("grill_start")).link;
   const subscribed = await fetch(base + "/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "events/subscribe" },
     body: JSON.stringify({ jsonrpc: "2.0", id: "subscribe", method: "events/subscribe", params: { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} },

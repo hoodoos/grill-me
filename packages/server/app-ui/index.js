@@ -8,6 +8,7 @@ const $ = id => document.getElementById(id);
 let ids, link, started = false, alive = true, generation = 0, revision = -1, round = 0;
 let ui, grill, draft, intent, confirmed = false, notifyingIntent, notified = false, retryAction;
 let pollController;
+let lostRound = 0; // current-only loss notice; never misrepresent another winner as ours
 function retire() {
   try { ui?.destroy(); } catch {} ui = null;
   const old = $("grill-root"), fresh = old.cloneNode(false); fresh.removeAttribute("class"); old.replaceWith(fresh);
@@ -19,7 +20,7 @@ function retry(fn) { retryAction = fn; $("retry").hidden = !fn; }
 $("retry").onclick = () => { const fn = retryAction; retry(null); if (fn) void fn(); };
 function end(reason) {
   if (!alive) return; alive = false; generation++; pollController?.abort();
-  ids = link = grill = draft = intent = null; retry(null);
+  ids = link = grill = draft = intent = null; lostRound = 0; retry(null);
   message({ finished: "All done—your agent has finished this grill.", cancelled: "This grill was cancelled.", expired: "This session expired." }[reason] ?? "Session ended or expired.");
 }
 async function tool(name, args, signal) {
@@ -31,7 +32,7 @@ async function notify() {
   if (!alive || !confirmed || notified || notifyingIntent === intent || !intent) return;
   const g = generation, saved = intent;
   if (!app.getHostCapabilities()?.message?.text) {
-    message("Sent. This host cannot request an automatic follow-up here. Your answers remain safe for your agent to collect."); return;
+    message("Sent. This host cannot request an automatic follow-up here. Your answers remain safe for your agent to collect."); retry(notify); return;
   }
   notifyingIntent = saved;
   try {
@@ -54,7 +55,7 @@ async function submitIntent() {
   if (!alive || g !== generation || saved !== intent) return;
   if (result.status === "ENDED") { end(result.reason); return; }
   if (result.status !== "SUBMITTED") {
-    intent = null; confirmed = false; generation++; grill = draft = null;
+    lostRound = saved.round; intent = null; confirmed = false; generation++; grill = draft = null;
     message("Another submission won this round. Your answers were not delivered. Waiting for your agent."); return;
   }
   generation++; // retired onChange/swipe callbacks cannot recreate purged plaintext
@@ -80,7 +81,7 @@ async function accept(snapshot) {
   if (snapshot.state === "pending") {
     generation++; const g = generation; retire();
     if (oldRound !== round) draft = null;
-    intent = null; confirmed = notified = false; retry(null);
+    intent = null; lostRound = 0; confirmed = notified = false; retry(null);
     const decoded = await openRound(snapshot, { ...ids, round });
     if (!alive || g !== generation) return;
     grill = decoded; $("status").hidden = true; $("cards").hidden = false;
@@ -91,9 +92,11 @@ async function accept(snapshot) {
   } else if (snapshot.state === "answered") {
     if (intent && intent.round === round && intent.submissionId === snapshot.submissionId) {
       if (!confirmed) { try { await submitIntent(); } catch { retry(submitIntent); } }
-    } else { generation++; grill = draft = intent = null; message("This round has been submitted. Waiting for your agent to collect it."); }
+    } else { if (intent?.round === round) lostRound = round; generation++; grill = draft = intent = null; message(lostRound === round
+      ? "Another submission won this round. Your answers were not delivered. Waiting for your agent."
+      : "This round was submitted from another view. Waiting for your agent to collect it."); }
   } else if (snapshot.state === "idle") {
-    generation++; intent = grill = draft = null; confirmed = notified = false; retry(null);
+    generation++; intent = grill = draft = null; lostRound = 0; confirmed = notified = false; retry(null);
     message("Your agent is thinking. Your next questions will appear here automatically.");
   }
 }

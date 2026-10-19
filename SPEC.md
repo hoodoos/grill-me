@@ -326,7 +326,7 @@ transport contract is [docs/HOSTED-MCP.md](docs/HOSTED-MCP.md).
 - Complete pinned Matt workflow is included unchanged in initialize instructions; the first
   512characters explain the hosted capability/send/wait/explicit-ACK cycle independently.
   No npm publication is needed for hosted custom connections. Public-directory submission
-  and in-chat MCP Apps cards remain separate future work.
+  remains separate; the hosted MCP Apps extension is described in `docs/INLINE-APPS.md`.
 
 ## Install
 
@@ -393,7 +393,11 @@ not separate npm packages.
 4b. **Hosted MCP server** at `grill-me.ai/mcp` for claude.ai (web and mobile) and ChatGPT.
 5. **Agent Hub** switches its grill page to `grill-me-ai/ui` and `grill-me-ai/core`.
 
-Later: in-chat swipe cards through the MCP Apps extension.
+Hosted MCP Apps cards reuse the unchanged shared swipe UI through `grill_show` and a
+self-contained resource. Only encrypted state and exact submission are app-visible;
+model tools including ACK are explicitly model-only. A confirmed submit may request a
+host follow-up, never ACK. See `docs/INLINE-APPS.md`; actual provider rendering remains
+separate from SDK/sandbox verification, with Grok inline rendering unverified.
 
 ## Open questions
 

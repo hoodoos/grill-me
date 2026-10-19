@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "../src/server.js";
 import { parseSessionLink, sealRoundAnswers } from "../../core/src/session.js";
 import { newId, newSecret } from "../../core/src/crypto.js";
+import { readFile } from "node:fs/promises";
 const headers = { accept: "application/json, text/event-stream", "content-type": "application/json" };
 const grill = { v: 1, questions: [{ n: 1, title: "Inline disposable", recommend: { why: "Test" } }] };
 const parse = text => JSON.parse(text.startsWith(":") ? text.split("\n").find(l => l.startsWith("data: ")).slice(6) : text);
@@ -35,6 +36,11 @@ test("stateless Apps catalog has explicit least privilege; immutable self-contai
     const resource = result.contents[0]; assert.equal(resource.mimeType, "text/html;profile=mcp-app");
     assert.deepEqual(resource._meta.ui.csp, { connectDomains: [], resourceDomains: [], frameDomains: [] });
     assert.ok(resource.text.includes("<script>")); assert.ok(!/<(?:script|iframe)[^>]+src=/.test(resource.text));
+    const notices = JSON.parse(resource.text.match(/id="third-party-notices">(.*?)<\/script>/s)[1]);
+    assert.ok(notices.some(n => n.package === "@modelcontextprotocol/ext-apps"));
+    for (const pkg of notices) for (const file of pkg.notices) {
+      assert.equal(file.text, await readFile(new URL(`../../../node_modules/${pkg.package}/${file.name}`, import.meta.url), "utf8"), "actual bundled license bytes retained");
+    }
     assert.equal((await f.rpc("resources/read", { uri: "https://private-sentinel.invalid" }, modern)).body.error.message, "Unknown resource");
   }
   const init = (await f.rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "legacy", version: "1" } })).body.result;
