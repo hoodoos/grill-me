@@ -84,6 +84,10 @@ Session records are separate from legacy current pending state and identified by
   Persist one exact encrypted
   publication intent (id/key/operation/blob/round) atomically BEFORE request; retry/recovery reuses it.
   Never generate duplicate rounds after a lost reply or overwrite another pending publication/cache.
+  An explicit id/round with a saved publication intent resumes that exact request (including initial
+  round1); different input is a conflict. If confirmation remains ambiguous after bounded retries,
+  expose `PUBLISHING` plus that id/round/link and retry guidance, not a successful-send claim or an
+  instruction to create a new session. Never recover through a global/latest-session heuristic.
 - CLI `send --session` creates; `send --id ID --round N [--revision V]` publishes on that explicit session.
   `wait/fetch/cancel ID` work for both. Add `finish ID` for idle sessions. No automatic QR.
 - MCP `grill_send` adds optional `session:boolean` (defaultfalse for compatibility), `id`, `round`,
