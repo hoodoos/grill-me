@@ -10,6 +10,8 @@ never the interview history. See [ANSWER-EVENTS.md](ANSWER-EVENTS.md) for the mo
 Optional in-chat swipe cards use the same current session through a separate read-only
 `grill_show` render tool and self-contained MCP Apps resource. See [INLINE-APPS.md](INLINE-APPS.md)
 for exact schemas, least-privilege host enforcement and honest follow-up/fallback limits.
+After the first READY, call it once without guessing host support; supporting hosts render
+and others keep the same phone fallback. Later rounds reuse that view without another show.
 
 1. `grill_start({})` returns `PREPARED`, `link`, `round:1`, `expectedRevision:0`.
    The result also includes the complete unchanged Matt skill in `grillingInstructions`

@@ -57,6 +57,8 @@ test("hosted instructions, independent legacy and continuation schemas and stric
   const prepared = await f.call("grill_start");
   assert.ok(prepared.structuredContent.grillingInstructions.includes(skill), "tool result carries the whole original skill without relying on initialize.instructions");
   assert.ok(prepared.content[0].text.includes(skill), "text-only hosts receive the literal full skill too");
+  assert.match(prepared.content[0].text, /After the FIRST READY, call grill_show ONCE/);
+  assert.match(init.result.instructions, /never refresh it with another grill_show/);
   assert.equal(prepared.content[0].text.split(skill).length, 2, "do not duplicate the full skill in the text result");
   assert.match(tools.find(t => t.name === "grill_start").description, /BEFORE drafting questions/);
   assert.ok(tools.find(t => t.name === "grill_send").inputSchema.properties.grill.properties.questions.items.required.includes("recommend"));

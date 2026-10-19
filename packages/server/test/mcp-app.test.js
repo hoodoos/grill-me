@@ -50,7 +50,8 @@ test("stateless Apps catalog has explicit least privilege; immutable self-contai
 test("private view context only in result metadata, UI encrypted submit exact retries/conflict and explicit agent ACK", async t => {
   const f = await fixture(t), prepared = (await f.call("grill_start")).structuredContent;
   const { link } = prepared, ids = parseSessionLink(link);
-  await f.call("grill_send", { link, round: 1, expectedRevision: 0, grill });
+  const ready = await f.call("grill_send", { link, round: 1, expectedRevision: 0, grill });
+  assert.match(ready.content[0].text, /After the FIRST READY, call grill_show ONCE/);
   const shown = await f.call("grill_show", { link });
   assert.equal(shown._meta["ai.grill-me/view"].link, link);
   assert.ok(!JSON.stringify(shown.content).includes(ids.secret)); assert.ok(!JSON.stringify(shown.structuredContent).includes(ids.secret));
@@ -70,7 +71,8 @@ test("private view context only in result metadata, UI encrypted submit exact re
   await f.call("grill_ack", { link, receipt: answers.receipt });
   const acked = (await f.call("grill_ui_state", { link })).structuredContent.snapshot;
   assert.equal(acked.state, "idle"); assert.equal(acked.ct, undefined);
-  await f.call("grill_send", { link, round: 2, expectedRevision: acked.revision, grill });
+  const next = await f.call("grill_send", { link, round: 2, expectedRevision: acked.revision, grill });
+  assert.ok(!next.content[0].text.includes("call grill_show ONCE"), "later rounds do not ask the model to remount the view");
   assert.equal((await f.call("grill_ui_submit", body)).structuredContent.status, "CONFLICT");
   await f.call("grill_cancel", { link });
   assert.equal((await f.call("grill_ui_state", { link })).structuredContent.reason, "cancelled");
