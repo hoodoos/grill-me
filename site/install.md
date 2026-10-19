@@ -16,7 +16,7 @@ Claude: open Customize (or Settings) > Connectors > Add custom connector. Enter 
 
 ChatGPT web: open Plugins > plus > Add custom MCP server. Enter the URL, choose No authentication, review the warning, then Create as a plugin. Install the personal plugin, open a new Work chat and select it with @. Availability depends on your account and workspace policies. This is not a promise of ChatGPT mobile or desktop support.
 
-Ask the enabled connector to grill you. It uses grill_start once, then the same private link for each round. It reads answers with grill_wait and only acknowledges them with grill_ack after receiving them. If a call is interrupted, retry the same link and round. Never paste a private interview link into an install prompt.
+Once connected, ask it to grill you. Keep the phone link open; each next round appears there automatically.
 
 Privacy: hosted app mode handles the questions, answers and link key transiently on Grill Me's server to encrypt/decrypt them. Only the current encrypted round and uncollected encrypted answers are persisted; acknowledgement clears them. The model/provider also sees your conversation and private link. Local setups below encrypt on your device and do not send the key to Grill Me.
 
@@ -29,7 +29,7 @@ claude plugin install grill-me@grill-me
 
 Then the user types `/reload-plugins` in Claude Code, or restarts Claude Code.
 
-## Codex (CLI and the ChatGPT desktop app)
+## Codex
 
 ```
 codex plugin marketplace add hoodoos/grill-me
