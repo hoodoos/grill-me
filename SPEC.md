@@ -25,7 +25,7 @@ rounds, retains current state only, and preserves the 0.1.0 one-shot paths descr
 - **Any question format in, one internal format out.**
 - **Cheap to run.** One small Node server.
 
-Not goals: accounts, history, sharing grills with other people, push notifications (that's Agent Hub).
+Not goals: accounts, history, sharing grills with other people, general-purpose push notifications (that's Agent Hub). Bounded answer-ready host callbacks continue the current interview without a chat nudge; they do not create a history service.
 
 ## How it works
 
@@ -290,6 +290,14 @@ transport contract is [docs/HOSTED-MCP.md](docs/HOSTED-MCP.md).
   `grill_wait` returns answers without clearing them; `grill_ack` confirms actual model receipt
   with the unchanged original round/revision/submission receipt; `grill_finish` requires idle;
   `grill_cancel` explicitly aborts. Network response completion is never treated as model receipt.
+- Automatic host continuation is additive: modern MCP2.0 `2026-07-28` per-request discovery,
+  tools and events coexist with legacy2025 clients. Native `grill.answers_ready` callbacks
+  can wake the SAME subscribed ChatGPT chat. Two extra server-only Grok adapter tools
+  `grill_subscribe`/`grill_unsubscribe` do not claim old-chat resume; each fresh run must
+  read/update host-owned durable context before an ACK checkpoint receipt. See
+  [docs/ANSWER-EVENTS.md](docs/ANSWER-EVENTS.md) for exact schemas, provider limitations,
+  transaction/race/retry/security bounds, current-only encrypted callback storage and
+  persistent0600 DATA key. No packaged local files or Matt workflow change.
 - Randomized AES-GCM/v2 session+round+slot AAD stays unchanged. Keyed canonical-input publish
   identities allow exact lost-reply/concurrent retry without replacing pending content.
   The private key/plaintext exists transiently in a call; no readable persistence, local
@@ -318,7 +326,7 @@ transport contract is [docs/HOSTED-MCP.md](docs/HOSTED-MCP.md).
 - Complete pinned Matt workflow is included unchanged in initialize instructions; the first
   512characters explain the hosted capability/send/wait/explicit-ACK cycle independently.
   No npm publication is needed for hosted custom connections. Public-directory submission
-  and in-chat MCP Apps cards remain separate future work.
+  remains separate; the hosted MCP Apps extension is described in `docs/INLINE-APPS.md`.
 
 ## Install
 
@@ -385,7 +393,11 @@ not separate npm packages.
 4b. **Hosted MCP server** at `grill-me.ai/mcp` for claude.ai (web and mobile) and ChatGPT.
 5. **Agent Hub** switches its grill page to `grill-me-ai/ui` and `grill-me-ai/core`.
 
-Later: in-chat swipe cards through the MCP Apps extension.
+Hosted MCP Apps cards reuse the unchanged shared swipe UI through `grill_show` and a
+self-contained resource. Only encrypted state and exact submission are app-visible;
+model tools including ACK are explicitly model-only. A confirmed submit may request a
+host follow-up, never ACK. See `docs/INLINE-APPS.md`; actual provider rendering remains
+separate from SDK/sandbox verification, with Grok inline rendering unverified.
 
 ## Open questions
 

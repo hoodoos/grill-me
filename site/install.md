@@ -17,8 +17,11 @@ Claude: open Customize (or Settings) > Connectors > Add custom connector. Enter 
 ChatGPT web: open Plugins > plus > Add custom MCP server. Enter the URL, choose No authentication, review the warning, then Create as a plugin. Install the personal plugin, open a new Work chat and select it with @. Availability depends on your account and workspace policies. This is not a promise of ChatGPT mobile or desktop support.
 
 Once connected, ask it to grill you. Keep the phone link open; each next round appears there automatically.
+Supporting MCP Apps hosts can also show the swipe cards inside the conversation; Grok inline rendering is unverified.
 
-Privacy: hosted app mode handles the questions, answers and link key transiently on Grill Me's server to encrypt/decrypt them. Only the current encrypted round and uncollected encrypted answers are persisted; acknowledgement clears them. The model/provider also sees your conversation and private link. Local setups below encrypt on your device and do not send the key to Grill Me.
+For automatic continuation after a turn ends, ChatGPT MCP Events can wake the same subscribed Work chat (web, desktop Cloud or dots); enable an answer-ready subscription with your app. Grok webhook automations start a fresh run and need an established host-owned interview checkpoint that each run can read and update; callback delivery alone does not establish this. Other clients must keep their wait turn active. You should not need to type answered or done in chat.
+
+Privacy: hosted app mode handles the questions, answers and link key transiently on Grill Me's server to encrypt/decrypt them. Only the current encrypted round and uncollected encrypted answers are persisted; acknowledgement clears them. Optional wake subscriptions also retain short-lived delivery metadata and encrypted callback configuration, never interview history. The model/provider also sees your conversation and private link. Local setups below encrypt on your device and do not send the key to Grill Me.
 
 ## Claude Code
 

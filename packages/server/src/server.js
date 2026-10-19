@@ -14,6 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import { createHostedMcp } from "./hosted-mcp.js";
+import { createAnswerEvents } from "./answer-events.js";
 import { isId, b64urlDecode, b64urlEncode, hashWriteToken, LIMITS } from "../../core/src/index.js";
 import { wantsMarkdown, loadInstall } from "./install.js";
 
@@ -81,6 +82,7 @@ export function createServer(options = {}) {
     ttlMs = 3_600_000,
     sweepMs = 60_000,
     hostedLimits = {},
+    eventOptions = {}, // private test seams; production uses pinned public HTTPS transport
     maxWaitS = 50,
     log = () => {},
     createsPerHour = 60,
@@ -115,6 +117,10 @@ export function createServer(options = {}) {
     id TEXT PRIMARY KEY, reason TEXT NOT NULL CHECK(reason IN ('finished','cancelled','expired')),
     expires_at INTEGER NOT NULL)`);
   dbh.exec("CREATE INDEX IF NOT EXISTS session_terminals_expiry ON session_terminals(expires_at)");
+  // Current answer occurrence only, cleared on ACK/advance. Existing pre-events answers
+  // have no recorded occurrence; their first observed ready time becomes stable here.
+  if (!dbh.prepare("PRAGMA table_info(sessions)").all().some(c => c.name === "ans_at")) dbh.exec("ALTER TABLE sessions ADD COLUMN ans_at INTEGER");
+  dbh.prepare("UPDATE sessions SET ans_at=? WHERE state='answered' AND ans_at IS NULL").run(now());
   dbh.exec(`CREATE TABLE IF NOT EXISTS stats(
     day TEXT NOT NULL, name TEXT NOT NULL, bucket TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL,
     PRIMARY KEY (day, name, bucket))`);
@@ -136,11 +142,11 @@ export function createServer(options = {}) {
   // Every state write is a conditional single-winner UPDATE: current state, exact revision,
   // live expiry and the authenticated hash, rechecked synchronously after async auth.
   const qSessionPublish = dbh.prepare(`UPDATE sessions SET round = ?, revision = revision + 1, state = 'pending', ct = ?, iv = ?, op_id = ?, op_digest = ?, op_rev = ?,
-    ans_ct = NULL, ans_iv = NULL, sub_id = NULL, sub_digest = NULL, sub_rev = NULL, expires_at = ?
+    ans_ct = NULL, ans_iv = NULL, ans_at = NULL, sub_id = NULL, sub_digest = NULL, sub_rev = NULL, expires_at = ?
     WHERE id = ? AND state = 'idle' AND revision = ? AND revision < 2147483647 AND round = ? AND expires_at > ? AND write_hash = ?`);
-  const qSessionAnswer = dbh.prepare(`UPDATE sessions SET state = 'answered', revision = revision + 1, ans_ct = ?, ans_iv = ?, sub_id = ?, sub_digest = ?, sub_rev = ?, expires_at = ?
+  const qSessionAnswer = dbh.prepare(`UPDATE sessions SET state = 'answered', revision = revision + 1, ans_ct = ?, ans_iv = ?, sub_id = ?, sub_digest = ?, sub_rev = ?, expires_at = ?, ans_at = ?
     WHERE id = ? AND state = 'pending' AND revision = ? AND revision < 2147483647 AND round = ? AND expires_at > ? AND write_hash = ?`);
-  const qSessionAck = dbh.prepare(`UPDATE sessions SET state = 'idle', revision = revision + 1, ct = NULL, iv = NULL, ans_ct = NULL, ans_iv = NULL, expires_at = ?
+  const qSessionAck = dbh.prepare(`UPDATE sessions SET state = 'idle', revision = revision + 1, ct = NULL, iv = NULL, ans_ct = NULL, ans_iv = NULL, ans_at = NULL, expires_at = ?
     WHERE id = ? AND state = 'answered' AND revision = ? AND revision < 2147483647 AND round = ? AND sub_id = ? AND expires_at > ? AND write_hash = ?`);
   const qSessionFinish = dbh.prepare("DELETE FROM sessions WHERE id = ? AND state = 'idle' AND revision = ? AND expires_at > ? AND write_hash = ?");
   const qSessionDelete = dbh.prepare("DELETE FROM sessions WHERE id = ?");
@@ -152,6 +158,9 @@ export function createServer(options = {}) {
   const qTerminalPrune = dbh.prepare("DELETE FROM session_terminals WHERE expires_at <= ?");
   const qTerminalCap = dbh.prepare(`DELETE FROM session_terminals WHERE id IN
     (SELECT id FROM session_terminals ORDER BY expires_at DESC, rowid DESC LIMIT -1 OFFSET ${MAX_TERMINALS})`);
+  let answerEvents;
+  try { answerEvents = createAnswerEvents({ dbh, db, now, stat: (name, bucket) => stat(name, bucket), options: eventOptions }); }
+  catch (error) { dbh.close(); throw error; }
 
   // The deletion and receipt commit together or neither happens. Notify/count only after commit.
   const endSession = (id, reason, remove) => {
@@ -159,6 +168,7 @@ export function createServer(options = {}) {
     try {
       const changed = remove().changes;
       if (changed) {
+        answerEvents.remove(id);
         qTerminalPrune.run(now());
         qTerminalInsert.run(id, reason, now() + TERMINAL_MS);
         qTerminalCap.run();
@@ -360,6 +370,7 @@ export function createServer(options = {}) {
       expireSession({ id, state });
     }
     qTerminalPrune.run(now());
+    answerEvents.prune();
     const cutoff = new Date(now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
     qPruneStats.run(cutoff);
   };
@@ -702,7 +713,10 @@ export function createServer(options = {}) {
     const digest = blobDigest(ct, iv);
     const t = now();
     try {
-      createWithoutOldReceipt(id, () => qSessionInsert.run(id, ct, iv, writeHash, operationId, digest, t, t + ttlMs));
+      createWithoutOldReceipt(id, () => {
+        qSessionInsert.run(id, ct, iv, writeHash, operationId, digest, t, t + ttlMs);
+        answerEvents.bind(qSessionGet.get(id));
+      });
     } catch {
       // The id is taken by a session: an exact retry of the current operation is a 200
       // snapshot (even after the state advanced); anything else conflicts. A row past its
@@ -787,7 +801,13 @@ export function createServer(options = {}) {
     if (!row) return;
     const digest = blobDigest(ct, iv);
     const t = now();
-    if (qSessionAnswer.run(ct, iv, submissionId, digest, expectedRevision, t + ttlMs, id, expectedRevision, round, t, row.write_hash).changes) {
+    const wonAnswer = answerEvents.transaction(() => {
+      const won = qSessionAnswer.run(ct, iv, submissionId, digest, expectedRevision, t + ttlMs, t, id, expectedRevision, round, t, row.write_hash).changes;
+      if (won) answerEvents.enqueue(qSessionGet.get(id));
+      return won;
+    });
+    if (wonAnswer) {
+      answerEvents.kick();
       stat("session_answered");
       stat("time_to_answer", timeBucket(t - row.created_at));
       wakeSessions(id);
@@ -843,7 +863,17 @@ export function createServer(options = {}) {
     if (row.state === "answered") {
       if (row.revision !== expectedRevision || row.sub_id !== submissionId) return sendJson(res, 409, { error: "conflicting ack" });
       const t = now();
-      if (qSessionAck.run(t + ttlMs, id, expectedRevision, round, submissionId, t, row.write_hash).changes) {
+      let wonAck;
+      try { wonAck = answerEvents.transaction(() => {
+        const checked = answerEvents.ackCheck(row, { round, expectedRevision, submissionId }, body.value.contextReceipt);
+        const won = qSessionAck.run(t + ttlMs, id, expectedRevision, round, submissionId, t, row.write_hash).changes;
+        if (won) answerEvents.acknowledged(row, checked);
+        return won;
+      }); } catch (e) {
+        if (e.reason === "context_required") return sendJson(res, 409, { error: "host checkpoint required before ACK" });
+        throw e;
+      }
+      if (wonAck) {
         wakeSessions(id);
         return sendEmpty(res, 204);
       }
@@ -856,7 +886,11 @@ export function createServer(options = {}) {
       // Same already-acked round: an exact replay (original submission AND the original
       // revision it was acked at, which is one below the idle revision) is a 204 no-op;
       // anything else conflicts.
-      if (row.sub_id === submissionId && row.sub_rev + 1 === expectedRevision) return sendEmpty(res, 204);
+      if (row.sub_id === submissionId && row.sub_rev + 1 === expectedRevision) {
+        try { answerEvents.ackCheck(row, { round, expectedRevision, submissionId }, body.value.contextReceipt, true); }
+        catch (e) { if (e.reason === "context_required") return sendJson(res, 409, { error: "original host checkpoint receipt required" }); throw e; }
+        return sendEmpty(res, 204);
+      }
       return sendJson(res, 409, { error: "conflicting ack" });
     }
     return sendJson(res, 409, { error: "nothing to acknowledge" }); // pending
@@ -916,15 +950,17 @@ export function createServer(options = {}) {
     const abort = () => { if (done) return; done = true; cleanup(); reject(new Error("aborted")); };
     signal.addEventListener("abort", abort, { once: true });
     const run = async () => {
-      if (operation === "snapshot" || operation === "answers") {
+      if (["snapshot", "state", "answers"].includes(operation)) {
         const row = liveSession(id);
         if (!row) return sessionGone(res, id);
         if (!tokenEq(row.write_hash, keys.writeHash)) return sendEmpty(res, 403);
         if (operation === "snapshot") return getSession(req, res, id, new URL("http://internal/?wait=0"));
+        if (operation === "state") return getSession(req, res, id, new URL(`http://internal/?wait=${wait}&after=${body.afterRevision}`));
         return getRoundAnswers(req, res, id, round, new URL(`http://internal/?wait=${wait}`));
       }
       if (operation === "create") return postSession(req, res);
       if (operation === "publish") return postRound(req, res, id);
+      if (operation === "answer") return postRoundAnswers(req, res, id, round);
       if (operation === "ack") return postAck(req, res, id, round);
       if (operation === "finish") return postFinish(req, res, id);
       if (operation === "cancel") return deleteSession(req, res, id);
@@ -933,7 +969,7 @@ export function createServer(options = {}) {
     run().catch(() => { if (!done) { done = true; cleanup(); reject(new Error("relay unavailable")); } });
     if (!req.destroyed) req.end(body ? JSON.stringify(body) : undefined);
   });
-  const hostedMcp = createHostedMcp({ relay: hostedRelay, stat, now, version: PKG_VERSION, limits: hostedLimits });
+  const hostedMcp = createHostedMcp({ relay: hostedRelay, events: answerEvents, stat, now, version: PKG_VERSION, limits: hostedLimits });
 
   const server = http.createServer(async (req, res) => {
     const t0 = now();
@@ -1036,7 +1072,8 @@ export function createServer(options = {}) {
         }
       }
       sessionWaiters.clear();
-      server.close((err) => {
+      server.close(async (err) => {
+        await answerEvents.close();
         try { dbh.close(); } catch {}
         err ? reject(err) : resolve();
       });

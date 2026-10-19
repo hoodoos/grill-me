@@ -6,3 +6,4 @@
 
 - [Install Grill Me](https://grill-me.ai/install): the install guide for AI agents
 - Hosted custom MCP endpoint: https://grill-me.ai/mcp (no authentication; account/client policies apply).
+- Answer-ready events: modern MCP2.0 subscriptions can wake the same ChatGPT Work chat. Grok fresh-run webhooks require host-owned durable context before ACK. Callback metadata/configuration is bounded and encrypted; no interview history.
