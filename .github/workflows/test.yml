@@ -16,4 +16,6 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci
-      - run: npm test
+      # Keep pack/build subprocesses from starving real-socket deadline tests on shared runners.
+      # The tests themselves still exercise concurrent clients/processes and unchanged deadlines.
+      - run: npm test -- --test-concurrency=1
