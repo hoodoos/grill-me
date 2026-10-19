@@ -13,35 +13,17 @@ import { resolveServer, stateHome, resolveAgent } from "./config.js";
 import { createGrill, waitAnswers, deleteGrill } from "./api.js";
 import { savePending, readPending, removePending, prunePending } from "./pending.js";
 import { qrText } from "./qr.js";
+import { NOW, SLEEP, defaultBackoff, abortedError, abortableSleep, waitScope } from "./scope.js";
+import { waitSessionRound, cancelSession } from "./session.js";
 
-const NOW = () => performance.now(); // monotonic wall-clock budget, unaffected by clock corrections
-const SLEEP = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const defaultBackoff = (failures, { baseMs = 1000, capMs = 30000 } = {}) =>
-  Math.min(capMs, baseMs * 2 ** (failures - 1));
-
-const abortedError = () => {
-  const err = new Error("the wait was cancelled");
-  err.code = "aborted";
+const coded = (code, message) => {
+  const err = new Error(message);
+  err.code = code;
   return err;
 };
 
-const abortableSleep = (ms, signal) =>
-  new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(abortedError());
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortedError());
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-
 // The question-count bucket sent as `qb` on create (daily metrics, no per-grill data).
-const qbBucket = (n) =>
+export const qbBucket = (n) =>
   n === 1 ? "1" : n <= 3 ? "2-3" : n <= 6 ? "4-6" : n <= 10 ? "7-10" : n <= 20 ? "11-20" : "21-30";
 
 async function loadPending(home, id) {
@@ -81,33 +63,7 @@ async function uploadGrill(grill, { server, home, qrMode, agent }) {
   return { id, link, qr, count: grill.questions.length, expiresAt };
 }
 
-// One absolute budget spans polling, retries, delivery and acknowledgement. An unanswered
-// CLI wait has no overall deadline; individual HTTP attempts still have their own timeout.
-function waitScope(seconds, signal, now) {
-  const until = Number.isFinite(seconds) ? now() + Math.max(0, seconds * 1000) : Infinity;
-  const deadline = new AbortController();
-  let closed = false;
-  const remaining = () => Math.max(0, until - now());
-  const timer = Number.isFinite(until) ? setTimeout(() => deadline.abort(), remaining()) : null;
-  timer?.unref();
-  const scope = {
-    signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
-    remaining,
-    ready() {
-      if (signal?.aborted) throw abortedError();
-      return !closed && !deadline.signal.aborted && remaining() > 0;
-    },
-    assertReady() {
-      if (!scope.ready()) {
-        const err = new Error("the wait deadline elapsed");
-        err.code = "deadline";
-        throw err;
-      }
-    },
-    close() { closed = true; clearTimeout(timer); deadline.abort(); },
-  };
-  return scope;
-}
+// One absolute budget spans polling, retries, delivery and acknowledgement (see scope.js).
 
 // Persist only the encrypted answer blob before handing any answers to a caller. The explicit
 // ack phase must run only after successful delivery. A failed/ambiguous DELETE keeps the cache,
@@ -173,12 +129,17 @@ export async function send(input, { title, server, qr = "off", home, agent } = {
   return uploadGrill(res.grill, { server: resolveServer(server), home: dir, qrMode: qr, agent: resolveAgent(agent) });
 }
 
-export async function wait(id, { seconds = Infinity, onRetry, server, home, agent, signal, now = NOW, sleep = SLEEP, pollSeconds = 50, offlineMs = 5 * 60 * 1000, backoffMs = defaultBackoff, once = false } = {}) {
+export async function wait(id, { round, seconds = Infinity, onRetry, server, home, agent, signal, now = NOW, sleep = SLEEP, pollSeconds = 50, offlineMs = 5 * 60 * 1000, backoffMs = defaultBackoff, once = false } = {}) {
+  const dir = stateHome(home);
   const scope = waitScope(seconds, signal, now);
   let handedOff = false;
   try {
-    const dir = stateHome(home);
-    await prunePending(dir);
+    await prunePending(dir, { signal: scope.signal, ready: () => scope.ready() });
+    const existing = await readPending(dir, id);
+    if (existing?.v === 2) {
+      handedOff = true; // the session implementation owns this same absolute scope
+      return await waitSessionRound(id, { round, seconds, once, onRetry, server, home, agent, signal, now, sleep, pollSeconds, offlineMs, backoffMs, scope });
+    }
     const pending = await loadPending(dir, id);
     const srv = resolveServer(server || pending.server);
     const ag = resolveAgent(agent);
@@ -236,6 +197,9 @@ export async function resend(id, { qr = "off", server, home, agent } = {}) {
   const dir = stateHome(home);
   await prunePending(dir);
   const pending = await loadPending(dir, id);
+  if (pending.v === 2) {
+    throw coded("not-session", `${id} is an interview session: it is not resent. Publish the next round (send --id ${id} --round ${pending.round + 1}) or finish it.`);
+  }
   const srv = resolveServer(server || pending.server);
   const ag = resolveAgent(agent);
   const result = await uploadGrill(pending.grill, { server: srv, home: dir, qrMode: qr, agent: ag });
@@ -249,10 +213,11 @@ export async function resend(id, { qr = "off", server, home, agent } = {}) {
   return result;
 }
 
-export async function cancel(id, { server, home, agent } = {}) {
+export async function cancel(id, { server, home, agent, signal } = {}) {
   const dir = stateHome(home);
   await prunePending(dir);
   const pending = await loadPending(dir, id);
+  if (pending.v === 2) return cancelSession(id, { server, home, agent, signal });
   const srv = resolveServer(server || pending.server);
   const { writeToken } = await deriveKeys(pending.secret);
   try {

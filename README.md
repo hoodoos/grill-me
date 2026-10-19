@@ -9,9 +9,22 @@ It's a free, open-source taster for Agent Hub: the same grill UI, without accoun
 
 ## Install
 
-Public installation requires `grill-me-ai@0.1.0` published to npm and the M4 plugin
+The `session-0.2.0` branch adds persistent interviews and is not released yet. See the
+[session protocol](docs/SESSION-PROTOCOL.md) for the API and current-only storage contract.
+The existing 0.1 one-shot calls remain compatible.
+
+For an interview, start with `grill-me send --session questions.md`, retain that explicit id,
+then publish each ready frontier with `grill-me send --id ID --round N questions.md`.
+The same phone link waits and updates automatically. Collect with `wait ID`/`fetch ID`;
+after confirming shared understanding, use `finish ID`. Finish refuses pending questions
+or uncollected answers; `cancel ID` explicitly aborts. MCP wrappers use `session:true`,
+reuse the saved id and next round in `grill_send`, and end with `grill_finish`.
+`PUBLISHING` means unconfirmed: retry the saved id/round and identical questions.
+The relay/phone retain the current round only; the agent conversation owns interview history.
+
+Public 0.2 installation requires `grill-me-ai@0.2.0` published to npm and the plugin
 marketplaces available on main. The Claude Desktop download also requires the GitHub
-`v0.1.0` release asset. For the dated release status, pending gates and separate private
+`v0.2.0` release asset. For the dated 0.1 release history and separate private
 artifact steps, see the repository
 [acceptance checklist](https://github.com/hoodoos/grill-me/blob/main/docs/ACCEPTANCE.md)
 (available on main after the reviewed documentation merge).

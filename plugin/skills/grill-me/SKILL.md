@@ -29,7 +29,7 @@ depend on other unresolved questions in this round.
 Pipe exactly the questions (not your whole reply) to `send` with a heredoc — no temp file:
 
 ```bash
-npx -y grill-me-ai send - <<'EOF'
+npx -y grill-me-ai send --session - <<'EOF'
 ❓ Q1 - …
 EOF
 ```
@@ -42,7 +42,12 @@ Grill it on your phone
 ```
 
 Use the real link as plain text, without a code block. Do not print a QR code. Keep the `id`
-for `cancel`, `resend` and `fetch`; it is not part of the user-facing footer.
+for subsequent rounds, `cancel`, `finish` and `fetch`; it is not part of the user-facing footer.
+Publish each subsequent ready frontier with `send --id <id> --round <next-number> -`, piping
+the full new questions as before. Reuse that explicit interview identity; never a global/latest
+session. The open phone waits and updates automatically at the same link. Keep every round
+fully visible in chat. On `STATUS: PUBLISHING`, the upload is UNCONFIRMED: retry the exact
+returned id/round and same questions; do not claim readiness or create another session.
 
 ## 3. Wait for the answers in the background
 
@@ -59,8 +64,10 @@ Stop the background wait and run `npx -y grill-me-ai cancel <id>`.
 
 - `STATUS: ANSWERS` — the lines above it are the answers: `Q<n> - agree` (the ➡️), `Q<n> - <choice
   name>`, `Q<n> - skip for now, ask again later`, or the user's own words. Carry on with them.
-- `STATUS: EXPIRED` — say "The grill expired. Want me to send it again?" and run
-  `npx -y grill-me-ai resend <id>` on yes (new link, the phone keeps its progress).
+- `STATUS: IDLE` — the round was collected. Publish the next ready frontier with the saved
+  id and next round number, or finish after shared-understanding confirmation.
+- `STATUS: EXPIRED` — offer a new session for the current frontier, without claiming that
+  old phone drafts/history resume. Sessions are not resent with the one-shot `resend` command.
 - `STATUS: OFFLINE` — say "Couldn't reach grill-me.ai. Paste the answers from Copy answers, or say
   'check grill'." On "check grill", run `npx -y grill-me-ai fetch <id>`.
 - `STATUS: WAITING` (fetch only) — no answers yet; wait or check again later.
@@ -68,7 +75,12 @@ Stop the background wait and run `npx -y grill-me-ai cancel <id>`.
 ## 6. Outside Claude Code
 
 No background commands there: use the MCP tools `grill_send` and `grill_wait` if they are available,
-with the same format and status mapping.
+with the same format and status mapping. Pass `session:true`, retain the explicit id, and
+publish the next round with that id and round number; use `grill_finish` to end an idle session.
+
+After Matt's shared-understanding confirmation, run `npx -y grill-me-ai finish <id>`.
+It refuses pending questions/uncollected answers; cancel explicitly aborts the current round.
+The relay/phone retain only the current round; interview history stays in the conversation.
 
 ## Credit and source
 

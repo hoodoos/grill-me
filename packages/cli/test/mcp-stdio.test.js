@@ -104,7 +104,7 @@ test("initialize → tools/list → grill_send → phone answers → grill_wait 
   const { home, fake, mcp } = await fixture(t);
 
   const list = await mcp.request("tools/list");
-  assert.deepEqual(list.result.tools.map((x) => x.name), ["grill_send", "grill_wait", "grill_cancel"]);
+  assert.deepEqual(list.result.tools.map((x) => x.name), ["grill_send", "grill_wait", "grill_cancel", "grill_finish"]);
 
   const sent = await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
   const { id, link, count, expiresAt } = sent.result.structuredContent;
@@ -118,7 +118,7 @@ test("initialize → tools/list → grill_send → phone answers → grill_wait 
 
   // the metrics user-agent carries the mapped MCP client name
   const creates = fake.requests().filter((x) => x.method === "POST" && x.path === "/api/g");
-  assert.equal(creates.at(-1).userAgent, "grill-me-ai/0.1.0 (claude-code)");
+  assert.equal(creates.at(-1).userAgent, "grill-me-ai/0.2.0 (claude-code)");
 
   const pending = JSON.parse(await fs.readFile(path.join(home, "pending", `${id}.json`), "utf8"));
   const answering = sleep(200).then(() =>
@@ -198,7 +198,7 @@ test("the UA falls back through the allowlist for unknown clients", async (t) =>
   const { fake, mcp } = await fixture(t, { clientName: "Emacs MCP" });
   await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
   const creates = fake.requests().filter((x) => x.method === "POST" && x.path === "/api/g");
-  assert.equal(creates.at(-1).userAgent, "grill-me-ai/0.1.0 (other)");
+  assert.equal(creates.at(-1).userAgent, "grill-me-ai/0.2.0 (other)");
 });
 
 test("GRILL_ME_WAIT_SECONDS caps the seconds argument", async (t) => {

@@ -113,6 +113,9 @@ mutations and version-aware local writes prevent stale async cleanup from clobbe
 This protection covers independent CLI/MCP processes sharing a state home, not only a process-local
 Promise map: use an interprocess mutation lock and/or atomic version/file conflict detection. Persist
 the original acknowledgement expectedRevision and submissionId for exact retries after a lost reply.
+The successful output callback durably marks that cached delivery before attempting ACK. Only that
+mark permits a later send to retry cleanup automatically. An unmarked cache must first be replayed
+through wait/fetch and successfully output; publication cannot acknowledge undelivered answers.
 All bounded MCP paths include sleeps/fetch/body/output/ack in their original deadline/signal. Unbounded
 CLI polling remains supported. Output does not block on cleanup; next send resolves ack recovery first.
 
@@ -133,6 +136,8 @@ Confirmed winning submission clears local readable grill/draft/answers and old m
 state changes. A different submission winning409 must say another device answered, never claim local
 answers were delivered; retain unsent current draft only until ack/advance, then purge it. Unknown/lost
 response reuses same submissionId/blob and inspects state; do not silently submit a fresh ciphertext.
+An ambiguous outgoing submission freezes its saved draft and answer digest. A later edited retry is
+refused with recovery guidance, rather than silently sending the old ciphertext as the edited answer.
 Idle page waits and automatically mounts next round. Never replace a current unconfirmed draft with
 another round unless relay state proves previous submission/ack; reject unexpected contradictory state.
 
@@ -151,3 +156,22 @@ cancel/ack-loss and stale local cleanup races. Actual browser: same link round1-
 reload/reconnect/current draft, identical text newround reset, late async purge safety, swipes/mobile350,
 conflicting submission guidance, finish and warm oldcache transition. No owner phone fixture or production
 access. Reviewer must get source, raw proof and a PR, followed by one pinned deployment request.
+
+### Running the actual-browser regression
+
+`packages/server/test/session-browser.test.js` is opt-in: provide an installed Playwright-compatible
+`playwright-core` module and Chrome. Set `GRILL_ME_BROWSER_TEST=1`,
+`GRILL_ME_PLAYWRIGHT_MODULE=file:///absolute/path/to/playwright-core/index.mjs` and optionally
+`GRILL_ME_BROWSER_EXECUTABLE` to the Chrome executable, then run:
+
+```sh
+node --test packages/server/test/session-browser.test.js
+```
+
+The pinned 0.1 base commit must exist locally. The test uses the actual relay and library, real CDP
+touch, and a single browser context/origin with ordinary HTTP caching. It proves warm legacy graph
+reuse and new module fetches without cache clearing or browser request routing. Further cases cover
+API-offline reload/draft recovery, immutable outgoing retry, a losing device's copy after reload,
+same-browser stale tab callbacks, delayed actual WebCrypto/gesture callbacks, and finish/cancel purge.
+The 350px viewport is simulated resizing, not physical software-keyboard evidence. Reload retains
+an unconfirmed own-answer draft; reopen the own-answer form to continue editing it.

@@ -95,6 +95,14 @@ export function createServer(options = {}) {
   dbh.exec(`CREATE TABLE IF NOT EXISTS grills(
     id TEXT PRIMARY KEY, ct TEXT NOT NULL, iv TEXT NOT NULL, write_hash TEXT NOT NULL,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, opened_at INTEGER, ans_ct TEXT, ans_iv TEXT)`);
+  // Persistent interview sessions (protocol v2): the current round only, never history.
+  // Ciphertext slots are erased on acknowledgement; op_/sub_ hold only identities and digests
+  // for idempotent retries — never ciphertext, secrets or round history.
+  dbh.exec(`CREATE TABLE IF NOT EXISTS sessions(
+    id TEXT PRIMARY KEY, round INTEGER NOT NULL, revision INTEGER NOT NULL, state TEXT NOT NULL,
+    ct TEXT, iv TEXT, ans_ct TEXT, ans_iv TEXT, write_hash TEXT NOT NULL,
+    op_id TEXT, op_digest TEXT, op_rev INTEGER, sub_id TEXT, sub_digest TEXT, sub_rev INTEGER,
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)`);
   dbh.exec(`CREATE TABLE IF NOT EXISTS stats(
     day TEXT NOT NULL, name TEXT NOT NULL, bucket TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL,
     PRIMARY KEY (day, name, bucket))`);
@@ -110,13 +118,28 @@ export function createServer(options = {}) {
   const qPruneStats = dbh.prepare("DELETE FROM stats WHERE day < ?");
   const qVersions = dbh.prepare("SELECT COUNT(DISTINCT bucket) AS n FROM stats WHERE day = ? AND name = 'cli_version'");
   const qHasVersion = dbh.prepare("SELECT 1 FROM stats WHERE day = ? AND name = 'cli_version' AND bucket = ?");
+  const qSessionGet = dbh.prepare("SELECT * FROM sessions WHERE id = ?");
+  const qSessionInsert = dbh.prepare(`INSERT INTO sessions(id, round, revision, state, ct, iv, write_hash, op_id, op_digest, op_rev, created_at, expires_at)
+    VALUES (?, 1, 1, 'pending', ?, ?, ?, ?, ?, 0, ?, ?)`);
+  // Every state write is a conditional single-winner UPDATE: current state, exact revision,
+  // live expiry and the authenticated hash, rechecked synchronously after async auth.
+  const qSessionPublish = dbh.prepare(`UPDATE sessions SET round = ?, revision = revision + 1, state = 'pending', ct = ?, iv = ?, op_id = ?, op_digest = ?, op_rev = ?,
+    ans_ct = NULL, ans_iv = NULL, sub_id = NULL, sub_digest = NULL, sub_rev = NULL, expires_at = ?
+    WHERE id = ? AND state = 'idle' AND revision = ? AND revision < 2147483647 AND round = ? AND expires_at > ? AND write_hash = ?`);
+  const qSessionAnswer = dbh.prepare(`UPDATE sessions SET state = 'answered', revision = revision + 1, ans_ct = ?, ans_iv = ?, sub_id = ?, sub_digest = ?, sub_rev = ?, expires_at = ?
+    WHERE id = ? AND state = 'pending' AND revision = ? AND revision < 2147483647 AND round = ? AND expires_at > ? AND write_hash = ?`);
+  const qSessionAck = dbh.prepare(`UPDATE sessions SET state = 'idle', revision = revision + 1, ct = NULL, iv = NULL, ans_ct = NULL, ans_iv = NULL, expires_at = ?
+    WHERE id = ? AND state = 'answered' AND revision = ? AND revision < 2147483647 AND round = ? AND sub_id = ? AND expires_at > ? AND write_hash = ?`);
+  const qSessionFinish = dbh.prepare("DELETE FROM sessions WHERE id = ? AND state = 'idle' AND revision = ? AND expires_at > ? AND write_hash = ?");
+  const qSessionDelete = dbh.prepare("DELETE FROM sessions WHERE id = ?");
+  const qSessionExpired = dbh.prepare("SELECT id, state FROM sessions WHERE expires_at <= ?");
 
   const day = () => new Date(now()).toISOString().slice(0, 10); // UTC YYYY-MM-DD
   const stat = (name, bucket = "") => qStat.run(day(), name, bucket);
 
   // Agent/version/question-count signals come in at create time and are never stored with the grill.
-  const statCreate = (req, ctBytes, qb) => {
-    stat("created");
+  const statCreate = (req, ctBytes, qb, name = "created") => {
+    stat(name);
     stat("grill_size", sizeBucket(ctBytes));
     if (QB_BUCKETS.has(qb)) stat("questions", qb);
     const { version: v, agent } = parseUA(req.headers["user-agent"]);
@@ -130,9 +153,44 @@ export function createServer(options = {}) {
     return row && row.expires_at > now() ? row : null; // a row past expires_at is already a 404
   };
 
+  const liveSession = (id) => {
+    const row = qSessionGet.get(id);
+    return row && row.expires_at > now() ? row : null; // a row past expires_at is already a 404
+  };
+
+  // The current round only: ciphertext while pending/answered, none in idle, and never any
+  // answers ciphertext or round history.
+  const sessionSnapshot = (row) => ({
+    v: 2,
+    id: row.id,
+    round: row.round,
+    revision: row.revision,
+    state: row.state,
+    expiresAt: row.expires_at,
+    operationId: row.op_id,
+    ...(row.state !== "idle" ? { ct: row.ct, iv: row.iv } : {}),
+    ...(row.state === "answered" ? { submissionId: row.sub_id } : {}),
+  });
+
+  // Idempotency digests over the decoded ciphertext+iv bytes — never the ciphertext itself.
+  const blobDigest = (ct, iv) =>
+    crypto.createHash("sha256").update(b64urlDecode(ct)).update(b64urlDecode(iv)).digest("base64url");
+
+  const parseRound = (s) => {
+    if (!/^\d{1,10}$/.test(String(s ?? ""))) return null;
+    const n = Number(s);
+    return n >= 1 && n <= 2147483647 ? n : null;
+  };
+
+  const clampWait = (url) => {
+    const raw = Number(url.searchParams.get("wait") || 0);
+    return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), maxWaitS) : 0;
+  };
+
   // ---------- in-memory limits and live counters (never written to disk or logs) ----------
   const creates = new Map(); // ip -> timestamps within the rolling hour
   const waiters = new Map(); // grill id -> Set of { res, timer, ip }
+  const sessionWaiters = new Map(); // session id -> Set of { res, timer, ip, done, respond }
   const waitersByIp = new Map(); // ip -> count
   const logins = new Map(); // ip -> timestamps within the minute (stats login attempts)
   const minutes = new Map(); // minute epoch -> { requests, errors5xx, errors429 }
@@ -189,6 +247,44 @@ export function createServer(options = {}) {
     if (!w.done) { clearTimeout(w.timer); waitersByIp.set(w.ip, (waitersByIp.get(w.ip) || 1) - 1); }
   };
 
+  // Session polls re-evaluate the live row when woken, so the winning transition is the only
+  // signal: a retried write can never produce a second wake, body or metric.
+  const wakeSessions = (id) => {
+    const set = sessionWaiters.get(id);
+    if (!set) return;
+    sessionWaiters.delete(id);
+    for (const w of set) {
+      clearTimeout(w.timer);
+      w.done = true;
+      waitersByIp.set(w.ip, (waitersByIp.get(w.ip) || 1) - 1);
+      w.respond();
+    }
+  };
+  const dropSessionWaiter = (id, w) => {
+    const set = sessionWaiters.get(id);
+    if (!set || !set.delete(w)) return;
+    if (!set.size) sessionWaiters.delete(id);
+    if (!w.done) { clearTimeout(w.timer); waitersByIp.set(w.ip, (waitersByIp.get(w.ip) || 1) - 1); }
+  };
+  // Holds a session long poll; respond() re-reads the row and sends 200/204/404. Per-id and
+  // per-IP caps are shared with legacy waiters.
+  const holdSessionWaiter = (req, res, id, waitS, respond) => {
+    const ip = clientIp(req);
+    const total = (waiters.get(id)?.size || 0) + (sessionWaiters.get(id)?.size || 0);
+    if (total >= waitersPerGrill || (waitersByIp.get(ip) || 0) >= waitersPerIp)
+      return sendJson(res, 429, { error: "too many waiting requests" });
+    const w = { res, ip, done: false, respond };
+    // On timeout, re-evaluate instead of answering blind: an expired session is 404 gone
+    // immediately, without waiting for the sweeper.
+    w.timer = setTimeout(() => { dropSessionWaiter(id, w); w.done = true; w.respond(); }, waitS * 1000);
+    w.timer.unref();
+    res.on("close", () => dropSessionWaiter(id, w));
+    if (!sessionWaiters.has(id)) sessionWaiters.set(id, new Set());
+    sessionWaiters.get(id).add(w);
+    waitersByIp.set(ip, (waitersByIp.get(ip) || 0) + 1);
+    capMap(waitersByIp, 10_000);
+  };
+
   // The sweeper: expired rows are deleted (counted by whether they had answers), their waiters
   // get 404, and stats days older than 400 are pruned.
   const sweep = () => {
@@ -196,6 +292,12 @@ export function createServer(options = {}) {
       if (qDelete.run(id).changes) {
         stat(ans_ct === null ? "expired_unanswered" : "expired_answered");
         wake(id, 404, { error: "gone" });
+      }
+    }
+    for (const { id, state } of qSessionExpired.all(now())) {
+      if (qSessionDelete.run(id).changes) {
+        stat("session_expired", state === "pending" ? "unanswered" : state);
+        wakeSessions(id);
       }
     }
     const cutoff = new Date(now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
@@ -344,6 +446,7 @@ export function createServer(options = {}) {
     const days = dbh.prepare("SELECT day, name, bucket, count FROM stats WHERE day >= ? ORDER BY day, name, bucket").all(since);
     let waitersMax = 0, waitersTotal = 0;
     for (const set of waiters.values()) { waitersTotal += set.size; waitersMax = Math.max(waitersMax, set.size); }
+    for (const set of sessionWaiters.values()) { waitersTotal += set.size; waitersMax = Math.max(waitersMax, set.size); }
     const minuteNow = Math.floor(now() / 60_000);
     const minutesOut = [];
     for (let m = minuteNow - 14; m <= minuteNow; m++) {
@@ -416,6 +519,7 @@ export function createServer(options = {}) {
     if (decLen(writeHash) !== 32) return badRequest(res, "writeHash: must decode to 32 bytes");
     const ctLen = decLen(ct);
     if (ctLen < 17 || ctLen > LIMITS.grillBytes) return badRequest(res, `ct: must decode to 17..${LIMITS.grillBytes} bytes`);
+    if (qSessionGet.get(id)) return sendJson(res, 409, { error: "id taken" }); // the namespaces never overlap
     const t = now();
     const expiresAt = t + ttlMs;
     try { qInsert.run(id, ct, iv, writeHash, t, expiresAt); }
@@ -504,6 +608,236 @@ export function createServer(options = {}) {
     sendEmpty(res, 204);
   };
 
+  // ---------- persistent interview sessions (protocol v2) ----------
+  const sessionAuth = async (req, res, row) => {
+    const authRes = await auth(req, row);
+    if (authRes === 401) { sendJson(res, 401, { error: "missing or malformed Authorization header" }); return false; }
+    if (authRes === 403) { sendJson(res, 403, { error: "wrong write token" }); return false; }
+    return true;
+  };
+
+  // After awaited authentication, revalidate synchronously: a live row and the same
+  // authenticated write_hash (no delete+recreate or replacement inside the auth window).
+  const sessionRevalidate = (res, row0) => {
+    const row = liveSession(row0.id);
+    if (!row) { sendEmpty(res, 404); return null; }
+    if (!tokenEq(row.write_hash, row0.write_hash)) { sendJson(res, 403, { error: "wrong write token" }); return null; }
+    return row;
+  };
+
+  const postSession = async (req, res) => {
+    const ip = clientIp(req);
+    if (!createAllowed(ip)) { req.resume(); return sendJson(res, 429, { error: "too many grills" }); }
+    const body = await readJson(req);
+    if (body.error) return badRequest(res, body.error);
+    const { id, round, operationId, ct, iv, writeHash, qb } = body.value ?? {};
+    if (!isId(id)) return badRequest(res, "id: must be 16 base64url characters");
+    if (round !== 1) return badRequest(res, "round: must be 1");
+    if (!isId(operationId)) return badRequest(res, "operationId: must be 16 base64url characters");
+    if (decLen(iv) !== 12) return badRequest(res, "iv: must decode to 12 bytes");
+    if (decLen(writeHash) !== 32) return badRequest(res, "writeHash: must decode to 32 bytes");
+    const ctLen = decLen(ct);
+    if (ctLen < 17 || ctLen > LIMITS.grillBytes) return badRequest(res, `ct: must decode to 17..${LIMITS.grillBytes} bytes`);
+    if (qGet.get(id)) return sendJson(res, 409, { error: "id taken" }); // the namespaces never overlap
+    const digest = blobDigest(ct, iv);
+    const t = now();
+    try {
+      qSessionInsert.run(id, ct, iv, writeHash, operationId, digest, t, t + ttlMs);
+    } catch {
+      // The id is taken by a session: an exact retry of the current operation is a 200
+      // snapshot (even after the state advanced); anything else conflicts. A row past its
+      // expiry is already ended.
+      const row = qSessionGet.get(id);
+      if (!row) return sendJson(res, 409, { error: "id taken" });
+      if (!(row.expires_at > t)) return sendEmpty(res, 404);
+      if (row.round === 1 && row.op_id === operationId && row.op_digest === digest && row.write_hash === writeHash)
+        return sendJson(res, 200, sessionSnapshot(row));
+      return sendJson(res, 409, { error: "id taken" });
+    }
+    statCreate(req, ctLen, qb, "session_created");
+    sendJson(res, 201, sessionSnapshot(liveSession(id)));
+  };
+
+  const getSession = (req, res, id, url) => {
+    if (!isId(id)) return sendEmpty(res, 404);
+    const row = liveSession(id);
+    if (!row) return sendEmpty(res, 404);
+    const rawAfter = url.searchParams.get("after");
+    const after = rawAfter === null ? null : Number(rawAfter);
+    if (after !== null && (!Number.isInteger(after) || after < 0 || after > 2147483647))
+      return badRequest(res, "after: must be an integer");
+    if (after === null || row.revision !== after) return sendJson(res, 200, sessionSnapshot(row));
+    const waitS = clampWait(url);
+    if (!waitS) return sendEmpty(res, 204);
+    holdSessionWaiter(req, res, id, waitS, () => {
+      const cur = liveSession(id);
+      if (!cur) return sendJson(res, 404, { error: "gone" });
+      if (cur.revision !== after) return sendJson(res, 200, sessionSnapshot(cur));
+      return sendEmpty(res, 204);
+    });
+  };
+
+  const postRound = async (req, res, id) => {
+    if (!isId(id)) return sendEmpty(res, 404);
+    const row0 = liveSession(id);
+    if (!row0) return sendEmpty(res, 404);
+    const body = await readJson(req);
+    if (body.error) return badRequest(res, body.error);
+    const { round, expectedRevision, operationId, ct, iv, qb } = body.value ?? {};
+    if (!Number.isInteger(round) || round < 1 || round > 2147483647) return badRequest(res, "round: must be an integer 1..2147483647");
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1 || expectedRevision > 2147483647) return badRequest(res, "expectedRevision: must be an integer 1..2147483647");
+    if (!isId(operationId)) return badRequest(res, "operationId: must be 16 base64url characters");
+    if (decLen(iv) !== 12) return badRequest(res, "iv: must decode to 12 bytes");
+    const ctLen = decLen(ct);
+    if (ctLen < 17 || ctLen > LIMITS.grillBytes) return badRequest(res, `ct: must decode to 17..${LIMITS.grillBytes} bytes`);
+    if (!(await sessionAuth(req, res, row0))) return;
+    const row = sessionRevalidate(res, row0);
+    if (!row) return;
+    const digest = blobDigest(ct, iv);
+    const t = now();
+    if (row.state === "idle" && row.revision === expectedRevision && row.round + 1 === round &&
+        qSessionPublish.run(round, ct, iv, operationId, digest, expectedRevision, t + ttlMs, id, expectedRevision, row.round, t, row.write_hash).changes) {
+      wakeSessions(id);
+      return sendJson(res, 201, sessionSnapshot(liveSession(id)));
+    }
+    // Loser: only an exact retry of the current operation returns a 200 snapshot — no
+    // mutation, no extra metric. A different request with the same operationId conflicts.
+    const cur = liveSession(id);
+    if (!cur) return sendEmpty(res, 404);
+    if (cur.op_id === operationId && cur.op_digest === digest && cur.round === round && cur.op_rev === expectedRevision)
+      return sendJson(res, 200, sessionSnapshot(cur));
+    return sendJson(res, 409, { error: "conflicting operation" });
+  };
+
+  const postRoundAnswers = async (req, res, id, roundRaw) => {
+    if (!isId(id)) return sendEmpty(res, 404);
+    const round = parseRound(roundRaw);
+    if (round === null) return badRequest(res, "round: must be an integer 1..2147483647");
+    const row0 = liveSession(id);
+    if (!row0) return sendEmpty(res, 404);
+    const body = await readJson(req);
+    if (body.error) return badRequest(res, body.error);
+    const { expectedRevision, submissionId, ct, iv } = body.value ?? {};
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1 || expectedRevision > 2147483647) return badRequest(res, "expectedRevision: must be an integer 1..2147483647");
+    if (!isId(submissionId)) return badRequest(res, "submissionId: must be 16 base64url characters");
+    if (decLen(iv) !== 12) return badRequest(res, "iv: must decode to 12 bytes");
+    const ctLen = decLen(ct);
+    if (ctLen < 17 || ctLen > LIMITS.answersBytes) return badRequest(res, `ct: must decode to 17..${LIMITS.answersBytes} bytes`);
+    if (!(await sessionAuth(req, res, row0))) return;
+    const row = sessionRevalidate(res, row0);
+    if (!row) return;
+    const digest = blobDigest(ct, iv);
+    const t = now();
+    if (qSessionAnswer.run(ct, iv, submissionId, digest, expectedRevision, t + ttlMs, id, expectedRevision, round, t, row.write_hash).changes) {
+      stat("session_answered");
+      stat("time_to_answer", timeBucket(t - row.created_at));
+      wakeSessions(id);
+      return sendEmpty(res, 204);
+    }
+    // Loser: an identical saved submission/blob retries 200 without mutation; a conflicting,
+    // different or stale submission, or another round, is 409.
+    const cur = liveSession(id);
+    if (!cur) return sendEmpty(res, 404);
+    if ((cur.state === "answered" || cur.state === "idle") && cur.round === round &&
+        cur.sub_id === submissionId && cur.sub_digest === digest && cur.sub_rev === expectedRevision)
+      return sendJson(res, 200, { v: 2, id, round: cur.round, revision: cur.revision, state: cur.state, expiresAt: cur.expires_at, operationId: cur.op_id, submissionId: cur.sub_id });
+    return sendJson(res, 409, { error: "conflicting submission" });
+  };
+
+  const getRoundAnswers = (req, res, id, roundRaw, url) => {
+    if (!isId(id)) return sendEmpty(res, 404);
+    const round = parseRound(roundRaw);
+    if (round === null) return badRequest(res, "round: must be an integer 1..2147483647");
+    const row = liveSession(id);
+    if (!row) return sendEmpty(res, 404);
+    if (row.round !== round) return sendJson(res, 409, { error: "different round" });
+    if (row.state === "answered")
+      return sendJson(res, 200, { round: row.round, revision: row.revision, submissionId: row.sub_id, ct: row.ans_ct, iv: row.ans_iv });
+    const waitS = clampWait(url);
+    if (!waitS) return sendEmpty(res, 204);
+    holdSessionWaiter(req, res, id, waitS, () => {
+      const cur = liveSession(id);
+      if (!cur) return sendJson(res, 404, { error: "gone" });
+      if (cur.round !== round) return sendJson(res, 409, { error: "different round" });
+      if (cur.state === "answered")
+        return sendJson(res, 200, { round: cur.round, revision: cur.revision, submissionId: cur.sub_id, ct: cur.ans_ct, iv: cur.ans_iv });
+      return sendEmpty(res, 204);
+    });
+  };
+
+  const postAck = async (req, res, id, roundRaw) => {
+    if (!isId(id)) return sendEmpty(res, 404);
+    const round = parseRound(roundRaw);
+    if (round === null) return badRequest(res, "round: must be an integer 1..2147483647");
+    const row0 = liveSession(id);
+    if (!row0) return sendEmpty(res, 404);
+    const body = await readJson(req);
+    if (body.error) return badRequest(res, body.error);
+    const { expectedRevision, submissionId } = body.value ?? {};
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1 || expectedRevision > 2147483647) return badRequest(res, "expectedRevision: must be an integer 1..2147483647");
+    if (!isId(submissionId)) return badRequest(res, "submissionId: must be 16 base64url characters");
+    if (!(await sessionAuth(req, res, row0))) return;
+    const row = sessionRevalidate(res, row0);
+    if (!row) return;
+    if (round < row.round) return sendEmpty(res, 204); // a lower round was already acknowledged: no-op
+    if (round > row.round) return sendJson(res, 409, { error: "different round" }); // never touch a newer round
+    if (row.state === "answered") {
+      if (row.revision !== expectedRevision || row.sub_id !== submissionId) return sendJson(res, 409, { error: "conflicting ack" });
+      const t = now();
+      if (qSessionAck.run(t + ttlMs, id, expectedRevision, round, submissionId, t, row.write_hash).changes) {
+        wakeSessions(id);
+        return sendEmpty(res, 204);
+      }
+      const cur = liveSession(id);
+      if (!cur) return sendEmpty(res, 404);
+      if (cur.state === "idle" && cur.sub_id === submissionId && cur.sub_rev + 1 === expectedRevision) return sendEmpty(res, 204); // racing duplicate ack
+      return sendJson(res, 409, { error: "conflicting ack" });
+    }
+    if (row.state === "idle") {
+      // Same already-acked round: an exact replay (original submission AND the original
+      // revision it was acked at, which is one below the idle revision) is a 204 no-op;
+      // anything else conflicts.
+      if (row.sub_id === submissionId && row.sub_rev + 1 === expectedRevision) return sendEmpty(res, 204);
+      return sendJson(res, 409, { error: "conflicting ack" });
+    }
+    return sendJson(res, 409, { error: "nothing to acknowledge" }); // pending
+  };
+
+  const postFinish = async (req, res, id) => {
+    if (!isId(id)) return sendEmpty(res, 404);
+    const row0 = liveSession(id);
+    if (!row0) return sendEmpty(res, 404);
+    const body = await readJson(req);
+    if (body.error) return badRequest(res, body.error);
+    const { expectedRevision } = body.value ?? {};
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1 || expectedRevision > 2147483647) return badRequest(res, "expectedRevision: must be an integer 1..2147483647");
+    if (!(await sessionAuth(req, res, row0))) return;
+    const row = sessionRevalidate(res, row0);
+    if (!row) return;
+    const t = now();
+    if (qSessionFinish.run(id, expectedRevision, t, row.write_hash).changes) {
+      stat("session_finished");
+      wakeSessions(id);
+      return sendEmpty(res, 204);
+    }
+    const cur = qSessionGet.get(id);
+    if (!cur || cur.expires_at <= t) return sendEmpty(res, 404);
+    return sendJson(res, 409, { error: "finish requires an idle session at the current revision" });
+  };
+
+  const deleteSession = async (req, res, id) => {
+    if (!isId(id)) return sendEmpty(res, 404);
+    const row0 = liveSession(id);
+    if (!row0) return sendEmpty(res, 404);
+    if (!(await sessionAuth(req, res, row0))) return;
+    const row = sessionRevalidate(res, row0);
+    if (!row) return;
+    if (!qSessionDelete.run(id).changes) return sendEmpty(res, 404);
+    stat("session_cancelled");
+    wakeSessions(id);
+    sendEmpty(res, 204);
+  };
+
   const server = http.createServer(async (req, res) => {
     const t0 = now();
     res.on("close", () => {
@@ -537,6 +871,37 @@ export function createServer(options = {}) {
         }
         return sendEmpty(res, 405);
       }
+      if (p === "/api/s") {
+        if (req.method === "POST") return await postSession(req, res);
+        return sendEmpty(res, 405);
+      }
+      if (p.startsWith("/api/s/")) {
+        const segs = p.slice("/api/s/".length).split("/");
+        const id = segs[0];
+        if (segs.length === 1) {
+          if (req.method === "GET") return getSession(req, res, id, url);
+          if (req.method === "DELETE") return await deleteSession(req, res, id);
+          return sendEmpty(res, 405);
+        }
+        if (segs.length === 2 && segs[1] === "rounds") {
+          if (req.method === "POST") return await postRound(req, res, id);
+          return sendEmpty(res, 405);
+        }
+        if (segs.length === 2 && segs[1] === "finish") {
+          if (req.method === "POST") return await postFinish(req, res, id);
+          return sendEmpty(res, 405);
+        }
+        if (segs.length === 4 && segs[1] === "rounds" && (segs[3] === "answers" || segs[3] === "ack")) {
+          if (segs[3] === "answers") {
+            if (req.method === "POST") return await postRoundAnswers(req, res, id, segs[2]);
+            if (req.method === "GET") return getRoundAnswers(req, res, id, segs[2], url);
+            return sendEmpty(res, 405);
+          }
+          if (req.method === "POST") return await postAck(req, res, id, segs[2]);
+          return sendEmpty(res, 405);
+        }
+        return sendEmpty(res, 404);
+      }
       if (p.startsWith("/api/")) return sendEmpty(res, 404);
       // ---------- install routes (phase 3); nginx serves these from the static tree ----------
       if (p === "/install" || p === "/llms.txt" || p === "/") {
@@ -563,6 +928,15 @@ export function createServer(options = {}) {
       shuttingDown = true;
       clearInterval(sweeper);
       for (const id of [...waiters.keys()]) wake(id, 204); // shutdown answers every waiter 204
+      for (const set of sessionWaiters.values()) {
+        for (const w of set) {
+          clearTimeout(w.timer);
+          w.done = true;
+          waitersByIp.set(w.ip, (waitersByIp.get(w.ip) || 1) - 1);
+          sendEmpty(w.res, 204);
+        }
+      }
+      sessionWaiters.clear();
       server.close((err) => {
         try { dbh.close(); } catch {}
         err ? reject(err) : resolve();
