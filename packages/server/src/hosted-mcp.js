@@ -1,0 +1,233 @@
+// Stateless app transport. Capabilities/keys/plaintext exist in a call only. Never log input,
+// results or exceptions; persistent storage belongs exclusively to the encrypted relay.
+import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import { convert, validateGrill, answerLines, newId, newSecret, isId } from "../../core/src/index.js";
+import { parseSessionLink, makeSessionLink, sealRound, openRound, openRoundAnswers, deriveSessionKeys, validateRound } from "../../core/src/session.js";
+import { GRILL_SCHEMA } from "../../core/src/format.js";
+
+const ORIGIN = "https://grill-me.ai";
+const ORIGINS = new Set([ORIGIN, "https://claude.ai", "https://chatgpt.com"]);
+const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
+const UPSTREAM = readFileSync(new URL("../../core/src/grilling.md", import.meta.url), "utf8");
+export const HOSTED_INSTRUCTIONS =
+  "Grill Me interviews: call grill_start once, retain its private link; grill_send publishes each explicit round on that same link. Show every question in full, then 'Grill it on your phone' and the link. grill_wait returns answers without clearing them. Only AFTER receiving and retaining the answer lines, call grill_ack with the exact receipt; then publish the next round or grill_finish. WAITING: repeat wait. Retry uncertain writes with the same arguments. Never ACK before receiving answers. " +
+  "An explicit grilling request uses these tools even for one clarification; otherwise a lone unsolicited question can stay in chat. Follow the complete unchanged Matt Pocock workflow below. Never attach unrelated interviews to a previous link. Keep the link private; it contains the encryption capability. " +
+  "App mode handles plaintext and keys transiently on Grill Me's server; only ciphertext is persisted. The model/provider also sees the questions, answers and private link. Do not print QR codes. Finish only after shared-understanding confirmation; cancel when abandoning the interview. No answer history is kept here.\n\n" + UPSTREAM;
+
+const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
+const fail = code => { throw Object.assign(new Error(code), { safeCode: code }); };
+const field = (description, type = "string") => ({ type, description });
+const linkField = field("The exact private https://grill-me.ai/g/...?...#... link returned by grill_start. Never substitute another host.");
+const annotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const def = (name, description, properties, required, extra = {}) => ({ name, title: name.replaceAll("_", " "), description,
+  inputSchema: { type: "object", properties, required, additionalProperties: false }, annotations: { ...annotations, ...extra } });
+const TOOLS = [
+  def("grill_start", "Allocate a private capability for a NEW interview before publishing any questions. No questions are stored by this step. Retain the returned link and reuse it for every round. A lost start reply has not published anything; start again only if you never received a link.", {}, [], { idempotentHint: false }),
+  def("grill_send", "Publish a ready frontier in Matt Pocock's format using the saved link, explicit round and idle expectedRevision (0 for first round). Pass exactly one of grill or text. Show ALL questions in chat, then Grill it on your phone plus link. On uncertain output retry EXACT same arguments/link/round; do not start again. Never replace a pending round or uncollected answers.", {
+    link: linkField, round: field("Explicit round:1 first, then current+1.", "integer"), expectedRevision: field("0 on first publish, then exact idle revision from ACK.", "integer"),
+    grill: GRILL_SCHEMA, text: field("Complete frontier in the unchanged original Matt grilling text format."), title: field("Optional interview name."),
+  }, ["link", "round", "expectedRevision"]),
+  def("grill_wait", "Wait for this exact round's answers (default45 seconds, max50). WAITING: call again with same link/round. ANSWERS: retain/read the actual answer lines THEN call grill_ack with the exact returned receipt. Merely returning answers never clears them. IDLE means already acknowledged; publish next round or finish.", {
+    link: linkField, round: field("The explicit published round.", "integer"), seconds: field("Wall-clock wait budget, default45/max50 seconds.", "integer"),
+  }, ["link", "round"], { readOnlyHint: true }),
+  def("grill_ack", "Confirm you actually RECEIVED AND RETAINED the answers from grill_wait. Pass its exact receipt unchanged, including original expectedRevision. This clears only that round's ciphertexts. Retry identical ACK after lost reply; a late old ACK cannot erase the next round. Never call this before receiving answer lines.", {
+    link: linkField, receipt: { type: "object", additionalProperties: false, properties: {
+      round: field("Exact received round.", "integer"), expectedRevision: field("Exact ANSWERS revision, not a later snapshot.", "integer"), submissionId: field("Exact answer submission identifier."),
+    }, required: ["round", "expectedRevision", "submissionId"] },
+  }, ["link", "receipt"], { destructiveHint: true }),
+  def("grill_finish", "Explicitly finish this interview only AFTER confirming shared understanding. Requires an idle session at its exact current revision; pending questions/uncollected answers are refused. A known finished receipt makes retry safe.", {
+    link: linkField, expectedRevision: field("Exact current idle revision.", "integer"),
+  }, ["link", "expectedRevision"], { destructiveHint: true }),
+  def("grill_cancel", "Abort this interview when the user answered in chat or abandoned it. May discard pending questions/uncollected answers. Do not use to collect answers.", { link: linkField }, ["link"], { destructiveHint: true }),
+];
+const safeMessages = {
+  INPUT: "Invalid tool arguments. Use the advertised schema; retain the same private link and explicit round.",
+  CAPABILITY: "Invalid capability. Use the exact private Grill Me session link; other hosts are not accepted.",
+  CONFLICT: "Conflicting or stale operation. Do not replace current questions or uncollected answers. Retry only the exact saved request or inspect the intended round.",
+  LIMIT: "Hosted capacity limit reached. Retry later with the same saved arguments; do not create a new interview.",
+  UNAVAILABLE: "Operation unconfirmed or temporarily unavailable. Retry the exact saved arguments. Answers are not cleared without explicit ACK.",
+};
+const response = (id, result) => ({ jsonrpc: "2.0", id, result });
+const rpcError = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
+const out = (status, extra = {}) => ({ status, ...extra });
+function capability(link) {
+  try {
+    if (typeof link !== "string" || link.length > 256) fail("CAPABILITY");
+    const u = new URL(link), ids = parseSessionLink(link);
+    if (u.origin !== ORIGIN || u.username || u.password || u.search !== "?session=2" ||
+      link !== makeSessionLink(ids.id, ids.secret, ORIGIN)) fail("CAPABILITY");
+    return ids;
+  } catch { fail("CAPABILITY"); }
+}
+function validateArgs(tool, a) {
+  const schema = tool.inputSchema;
+  if (!object(a) || Object.keys(a).some(k => !(k in schema.properties)) || schema.required.some(k => !(k in a))) fail("INPUT");
+  if (a.round !== undefined && !validateRound(a.round)) fail("INPUT");
+  if (a.expectedRevision !== undefined && (!Number.isInteger(a.expectedRevision) || a.expectedRevision < 0 || a.expectedRevision > 2147483647)) fail("INPUT");
+  if (a.seconds !== undefined && (!Number.isInteger(a.seconds) || a.seconds < 1 || a.seconds > 50)) fail("INPUT");
+  if (a.receipt !== undefined && (!object(a.receipt) || Object.keys(a.receipt).sort().join() !== "expectedRevision,round,submissionId" ||
+    !validateRound(a.receipt.round) || !Number.isInteger(a.receipt.expectedRevision) || a.receipt.expectedRevision < 1 || a.receipt.expectedRevision > 2147483647 || !isId(a.receipt.submissionId))) fail("INPUT");
+}
+
+export function createHostedMcp({ relay, stat, now = Date.now, version, limits = {} }) {
+  const maxCreates = limits.creates ?? 600, maxWaits = limits.waits ?? 200, maxConversation = limits.conversation ?? 30;
+  const creates = new Map(), conversations = new Map(), controllers = new Set();
+  let waits = 0;
+  const prune = () => {
+    const cutoff = now() - 3_600_000;
+    for (const [id, item] of creates) if (item.at <= cutoff) creates.delete(id);
+    for (const [id, items] of conversations) {
+      const live = items.filter(at => at > cutoff);
+      live.length ? conversations.set(id, live) : conversations.delete(id);
+    }
+  };
+  const reserve = (id, conversation) => {
+    prune(); if (creates.has(id)) return;
+    if (creates.size >= maxCreates) { stat("hosted_rejected", "creates"); fail("LIMIT"); }
+    const list = conversation ? conversations.get(conversation) ?? [] : [];
+    if (conversation && (list.length >= maxConversation || (!conversations.has(conversation) && conversations.size >= 600))) {
+      stat("hosted_rejected", "conversation"); fail("LIMIT");
+    }
+    creates.set(id, { at: now() });
+    if (conversation) conversations.set(conversation, [...list, now()]);
+  };
+  const ended = r => out("ENDED", { reason: ["finished", "cancelled", "expired"].includes(r.body?.reason) ? r.body.reason : "unknown" });
+  const check = r => { if (r.status === 429) fail("LIMIT"); if (r.status === 403 || r.status === 401) fail("CAPABILITY"); if (r.status === 409) fail("CONFLICT"); if (r.status >= 400) fail("UNAVAILABLE"); return r; };
+  async function call(name, args, ctx) {
+    if (name === "grill_start") return out("PREPARED", { link: makeSessionLink(newId(), newSecret(), ORIGIN), round: 1, expectedRevision: 0,
+      message: "Capability allocated only; no questions published. Retain this link and call grill_send with round1/expectedRevision0." });
+    const ids = capability(args.link), keys = await deriveSessionKeys(ids.secret);
+    const invoke = (operation, body, round, wait = 0) => relay({ operation, id: ids.id, keys, body, round, wait, signal: ctx.signal, agent: ctx.agent });
+    const snapshot = await invoke("snapshot");
+    if (snapshot.status === 404 && name !== "grill_send") return ended(snapshot);
+    if (snapshot.status !== 404) check(snapshot);
+    if (name === "grill_send") {
+      if ((args.grill === undefined) === (args.text === undefined) || (args.title !== undefined && typeof args.title !== "string") ||
+        (args.text !== undefined && typeof args.text !== "string")) fail("INPUT");
+      let grill;
+      try {
+        const converted = args.text !== undefined ? convert(args.text) : validateGrill(args.grill);
+        if (!converted.ok) fail("INPUT");
+        const validated = validateGrill({ ...converted.grill, ...(args.title !== undefined ? { title: args.title } : {}) });
+        if (!validated.ok) fail("INPUT"); grill = validated.grill;
+      } catch { fail("INPUT"); }
+      // The keyed digest binds domain, session, round AND original expected revision. It is
+      // an opaque retry identity, not plaintext retention; randomized AES nonces stay intact.
+      const operationId = crypto.createHmac("sha256", keys.writeToken).update("grill-me/hosted/publish/v1\0")
+        .update(JSON.stringify([ids.id, args.round, args.expectedRevision, grill])).digest("base64url").slice(0, 16);
+      let r;
+      if (snapshot.status === 200 && snapshot.body.round === args.round && snapshot.body.operationId === operationId) r = snapshot;
+      else {
+        if (snapshot.status === 404) {
+          if (snapshot.body?.reason || args.round !== 1 || args.expectedRevision !== 0) return ended(snapshot);
+          reserve(ids.id, ctx.conversation);
+        } else if (snapshot.body.state !== "idle" || args.round !== snapshot.body.round + 1 || args.expectedRevision !== snapshot.body.revision) fail("CONFLICT");
+        const blob = await sealRound(grill, { ...ids, round: args.round });
+        r = await invoke(snapshot.status === 404 ? "create" : "publish", { id: ids.id, ...blob, round: args.round, operationId, expectedRevision: args.expectedRevision });
+        // Concurrent identical calls may encrypt different random nonces. Only one wins;
+        // recover the saved operation snapshot instead of replacing its ciphertext.
+        if (r.status === 409) {
+          const recovered = await invoke("snapshot");
+          if (recovered.status === 200 && recovered.body.round === args.round && recovered.body.operationId === operationId) r = recovered;
+        }
+        if (r.status === 404) return ended(r); check(r);
+      }
+      return out(r.body.state === "idle" ? "IDLE" : "READY", { link: args.link, id: ids.id, round: r.body.round, revision: r.body.revision,
+        state: r.body.state, count: grill.questions.length, expiresAt: r.body.expiresAt });
+    }
+    if (name === "grill_wait") {
+      if (snapshot.body.round !== args.round) fail("CONFLICT");
+      if (snapshot.body.state === "idle") return out("IDLE", { round: args.round, revision: snapshot.body.revision });
+      if (waits >= maxWaits) { stat("hosted_rejected", "waits"); fail("LIMIT"); }
+      waits++;
+      try {
+        const r = await invoke("answers", null, args.round, (args.seconds ?? 45));
+        if (r.status === 404) return ended(r); check(r);
+        if (r.status === 204) return out("WAITING", { round: args.round });
+        // Decrypt current question context from the same round snapshot, only in this call.
+        const grill = await openRound(snapshot.body, { ...ids, round: args.round });
+        const answers = await openRoundAnswers(r.body, grill, { ...ids, round: args.round });
+        return out("ANSWERS", { answers: answerLines(grill, answers), receipt: { round: args.round, expectedRevision: r.body.revision, submissionId: r.body.submissionId },
+          message: "Retain these answers, then call grill_ack with this exact receipt. Nothing has been cleared yet." });
+      } finally { waits--; }
+    }
+    const body = name === "grill_ack" ? { expectedRevision: args.receipt.expectedRevision, submissionId: args.receipt.submissionId } : { expectedRevision: args.expectedRevision };
+    const operation = name === "grill_ack" ? "ack" : name === "grill_finish" ? "finish" : "cancel";
+    const r = await invoke(operation, body, args.receipt?.round);
+    if (r.status === 404) return ended(r); check(r);
+    if (name === "grill_ack") {
+      const current = await invoke("snapshot");
+      return out("ACKNOWLEDGED", { round: args.receipt.round, ...(current.status === 200 ? { currentRound: current.body.round, revision: current.body.revision, state: current.body.state } : {}) });
+    }
+    return out(name === "grill_finish" ? "FINISHED" : "CANCELLED");
+  }
+
+  async function handle(req, res, url) {
+    const headers = { "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; frame-ancestors 'none'" };
+    const reply = (status, value) => { res.writeHead(status, headers); res.end(value === undefined ? undefined : JSON.stringify(value)); };
+    if (url.search) return reply(400, rpcError(null, -32600, "MCP URL must not contain query parameters"));
+    if (req.headers.origin !== undefined && !ORIGINS.has(req.headers.origin)) { stat("hosted_rejected", "origin"); return reply(403); }
+    if (req.method !== "POST") { res.setHeader("allow", "POST"); return reply(405); }
+    if (req.headers["mcp-session-id"] !== undefined || (req.headers["mcp-protocol-version"] !== undefined && !VERSIONS.includes(req.headers["mcp-protocol-version"]))) return reply(400);
+    const accept = String(req.headers.accept ?? "").toLowerCase().split(",").map(s => s.trim().split(";")[0]);
+    if (!accept.includes("application/json") || !accept.includes("text/event-stream")) return reply(406);
+    if (!/^application\/json(?:\s*;|$)/i.test(req.headers["content-type"] ?? "")) return reply(415);
+    let message;
+    try {
+      const chunks = []; let size = 0;
+      if (Number(req.headers["content-length"] || 0) > 32768) return reply(413);
+      for await (const c of req) { size += c.length; if (size > 32768) { reply(413); return; } chunks.push(c); }
+      message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch { return reply(400, rpcError(null, -32700, "Invalid JSON")); }
+    if (!object(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string" ||
+      ("id" in message && !(typeof message.id === "string" && message.id.length <= 128 || Number.isSafeInteger(message.id))) ||
+      (message.params !== undefined && !object(message.params))) return reply(400, rpcError(null, -32600, "Invalid JSON-RPC request"));
+    if (!("id" in message)) return ["notifications/initialized", "notifications/cancelled"].includes(message.method) ? reply(202) : reply(400);
+    const { id, params = {}, method } = message;
+    if (method === "initialize") return reply(200, response(id, { protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : VERSIONS[0],
+      capabilities: { tools: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS }));
+    if (method === "ping") return reply(200, response(id, {}));
+    if (method === "tools/list") return reply(200, response(id, { tools: TOOLS }));
+    if (method !== "tools/call") return reply(200, rpcError(id, -32601, "Method not found"));
+    const tool = TOOLS.find(t => t.name === params.name);
+    if (!tool) return reply(200, rpcError(id, -32602, "Unknown tool"));
+    let args = params.arguments ?? {};
+    try { validateArgs(tool, args); } catch { return reply(200, response(id, { isError: true, content: [{ type: "text", text: safeMessages.INPUT }] })); }
+    const controller = new AbortController(); controllers.add(controller);
+    const budget = tool.name === "grill_wait" ? (args.seconds ?? 45) * 1000 : 15_000;
+    const deadline = performance.now() + budget;
+    const timer = setTimeout(() => controller.abort(), budget); timer.unref();
+    const disconnect = () => controller.abort(); res.once("close", disconnect);
+    const sse = tool.name === "grill_wait";
+    if (sse) { res.writeHead(200, { ...headers, "content-type": "text/event-stream", "x-accel-buffering": "no" }); res.flushHeaders(); res.write(": connected\n\n"); }
+    const keepalive = sse ? setInterval(() => { if (!res.destroyed) res.write(": keepalive\n\n"); }, 10_000) : null;
+    keepalive?.unref();
+    let abortListener;
+    try {
+      const rawConversation = params._meta?.["openai/session"];
+      const conversation = typeof rawConversation === "string" && rawConversation.length > 0 && rawConversation.length <= 512
+        ? crypto.createHash("sha256").update(rawConversation).digest("hex") : null;
+      const value = await Promise.race([
+        call(tool.name, args, { signal: controller.signal, deadline, conversation, agent: /claude/i.test(req.headers["user-agent"] ?? "") ? "claude-ai" : /chatgpt|openai/i.test(req.headers["user-agent"] ?? "") ? "chatgpt" : "other" }),
+        new Promise((_, reject) => { abortListener = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })); controller.signal.addEventListener("abort", abortListener, { once: true }); }),
+      ]);
+      const text = value.status === "ANSWERS" ? `${value.answers}\nSTATUS: ANSWERS\n${value.message}` : `STATUS: ${value.status}\n${value.message ?? ""}${value.link ? "\nGrill it on your phone\n" + value.link : ""}`;
+      const body = response(id, { content: [{ type: "text", text }], structuredContent: value });
+      if (!res.destroyed) sse ? res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`) : reply(200, body);
+    } catch (e) {
+      const timed = controller.signal.aborted && tool.name === "grill_wait";
+      const value = timed ? out("WAITING", { round: args.round }) : null;
+      const body = response(id, timed ? { content: [{ type: "text", text: "STATUS: WAITING. Call again with the same link and round." }], structuredContent: value }
+        : { isError: true, content: [{ type: "text", text: safeMessages[e?.safeCode] ?? safeMessages.UNAVAILABLE }] });
+      if (!res.destroyed) sse ? res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`) : reply(200, body);
+    } finally {
+      clearTimeout(timer); if (keepalive) clearInterval(keepalive);
+      controller.signal.removeEventListener("abort", abortListener); res.off("close", disconnect);
+      controller.abort(); controllers.delete(controller); args = null; message = null;
+    }
+  }
+  return { handle, stats: () => { prune(); return { creates: creates.size, createLimit: maxCreates, createHeadroom: Math.max(0, maxCreates - creates.size), waits, waitLimit: maxWaits, waitHeadroom: Math.max(0, maxWaits - waits), conversations: conversations.size }; },
+    close: () => { for (const controller of controllers) controller.abort(); } };
+}

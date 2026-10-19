@@ -61,9 +61,9 @@ test("the nginx snippet's locations match the Node server's routes", async () =>
   const snippet = await text(path.join(ROOT, "deploy/nginx/grill-me.ai-locations.conf"));
   const locationBlocks = [...snippet.matchAll(/^location ((?:= )?\S+) \{\n([\s\S]*?)^\}/gm)];
   const proxied = locationBlocks.filter((m) => m[2].includes("proxy_pass http://127.0.0.1:8787;")).map((m) => m[1]);
-  assert.deepEqual(proxied.sort(), ["/api/", "/g/", "/stats", "= /go/hub", "= /healthz"]);
+  assert.deepEqual(proxied.sort(), ["/api/", "/g/", "/stats", "= /go/hub", "= /healthz", "= /mcp"]);
   // No other location proxies.
-  assert.equal((snippet.match(/proxy_pass/g) || []).length, 5);
+  assert.equal((snippet.match(/proxy_pass/g) || []).length, 6);
   // The static locations serve from files (HSTS is the only header before try_files).
   assert.match(snippet, /location = \/demo \{[\s\S]*?try_files \/grill\.html =404;/);
   assert.match(snippet, /location \/ \{[\s\S]*?try_files \$uri \$uri\.html \$uri\/ =404;/);
