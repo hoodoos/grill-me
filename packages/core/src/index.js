@@ -22,3 +22,16 @@ export {
   makeLink,
   parseLink,
 } from "./crypto.js";
+export {
+  SESSION_PROTOCOL,
+  MAX_ROUND,
+  validateRound,
+  sessionAad,
+  deriveSessionKeys,
+  sealRound,
+  openRound,
+  sealRoundAnswers,
+  openRoundAnswers,
+  makeSessionLink,
+  parseSessionLink,
+} from "./session.js";
