@@ -6,7 +6,7 @@ import { newId } from "../../core/src/crypto.js";
 const app = new App({ name: "Grill Me", version: "0.2.0" }, { availableDisplayModes: ["inline", "fullscreen"] }, { autoResize: false });
 const $ = id => document.getElementById(id);
 let ids, link, started = false, alive = true, generation = 0, revision = -1, round = 0;
-let ui, grill, draft, intent, confirmed = false, notifying = false, notified = false, retryAction;
+let ui, grill, draft, intent, confirmed = false, notifyingIntent, notified = false, retryAction;
 let pollController;
 function retire() {
   try { ui?.destroy(); } catch {} ui = null;
@@ -28,12 +28,12 @@ async function tool(name, args, signal) {
   return result.structuredContent;
 }
 async function notify() {
-  if (!alive || !confirmed || notified || notifying || !intent) return;
+  if (!alive || !confirmed || notified || notifyingIntent === intent || !intent) return;
   const g = generation, saved = intent;
   if (!app.getHostCapabilities()?.message?.text) {
     message("Sent. This host cannot request an automatic follow-up here. Your answers remain safe for your agent to collect."); return;
   }
-  notifying = true;
+  notifyingIntent = saved;
   try {
     // Metadata only. The model already owns the private link; never include its key,
     // questions, answers or a replacement ACK in this user-origin follow-up.
@@ -45,7 +45,7 @@ async function notify() {
     if (alive && g === generation && saved === intent) {
       message("Sent. The host follow-up was not confirmed. Retry the follow-up; your answers have not been cleared."); retry(notify);
     }
-  } finally { notifying = false; }
+  } finally { if (notifyingIntent === saved) notifyingIntent = null; }
 }
 async function submitIntent() {
   const saved = intent, g = generation;
@@ -57,6 +57,7 @@ async function submitIntent() {
     intent = null; confirmed = false; generation++; grill = draft = null;
     message("Another submission won this round. Your answers were not delivered. Waiting for your agent."); return;
   }
+  generation++; // retired onChange/swipe callbacks cannot recreate purged plaintext
   confirmed = true; grill = draft = null; retry(null);
   message("Sent. Waiting for your agent to pick up your answers.");
   await notify();
@@ -115,6 +116,9 @@ function dimensions(context = app.getHostContext()) {
   const d = context?.containerDimensions;
   const height = d?.height ?? d?.maxHeight;
   document.documentElement.style.setProperty("--host-height", Number.isFinite(height) && height > 0 ? `${height}px` : "100dvh");
+  // maxHeight is permission to request a bounded size, not proof that the host has
+  // already allocated it. A sandbox may initially be150px tall.
+  if (Number.isFinite(d?.maxHeight) && d.maxHeight > 0) app.sendSizeChanged({ height: d.maxHeight });
   $("expand").hidden = !context?.availableDisplayModes?.includes("fullscreen") || context?.displayMode === "fullscreen";
 }
 $("expand").onclick = () => { void app.requestDisplayMode({ mode: "fullscreen" }).catch(() => {}); };
