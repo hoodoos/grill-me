@@ -53,6 +53,13 @@ test("hosted instructions, six independent schemas and strict sanitized HTTP/JSO
   assert.deepEqual(tools.map(t => t.name), ["grill_start", "grill_send", "grill_wait", "grill_ack", "grill_finish", "grill_cancel"]);
   assert.equal(tools.find(t => t.name === "grill_wait").annotations.readOnlyHint, true);
   assert.equal(tools.find(t => t.name === "grill_start").annotations.readOnlyHint, true);
+  const skill = await fs.readFile(new URL("../../core/src/grilling.md", import.meta.url), "utf8");
+  const prepared = await f.call("grill_start");
+  assert.ok(prepared.structuredContent.grillingInstructions.includes(skill), "tool result carries the whole original skill without relying on initialize.instructions");
+  assert.ok(prepared.content[0].text.includes(skill), "text-only hosts receive the literal full skill too");
+  assert.equal(prepared.content[0].text.split(skill).length, 2, "do not duplicate the full skill in the text result");
+  assert.match(tools.find(t => t.name === "grill_start").description, /BEFORE drafting questions/);
+  assert.ok(tools.find(t => t.name === "grill_send").inputSchema.properties.grill.properties.questions.items.required.includes("recommend"));
   assert.equal(tools.find(t => t.name === "grill_ack").annotations.destructiveHint, true);
   for (const method of [sentinel, "tools/call"]) {
     const raw = await (await f.rpc(method, { name: sentinel, arguments: { link: sentinel } })).text();
@@ -78,6 +85,12 @@ test("same-link two rounds, concurrent identical publish recovery, retained answ
   const f = await fixture(t, { createsPerHour: 0, waitersPerIp: 0 }), prepared = await f.start();
   const ids = parseSessionLink(prepared.link), keys = await deriveSessionKeys(ids.secret);
   assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM sessions").get().n, 0, "prepare writes nothing");
+  for (const missingAdvice of [{ grill: { questions: [{ title: "No advice" }] } }, { text: "❓ **Q1** - **No advice**: Your decision?" }]) {
+    const rejected = await f.call("grill_send", { link: prepared.link, round: 1, expectedRevision: 0, ...missingAdvice });
+    assert.equal(rejected.isError, true, "hosted interview cannot publish a question without a recommended answer");
+    assert.match(rejected.content[0].text, /recommended answer/);
+    assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM sessions").get().n, 0);
+  }
   const sent = await Promise.all(Array.from({ length: 6 }, () => f.send(prepared.link)));
   for (const r of sent) { assert.equal(r.isError, undefined, JSON.stringify(r)); assert.equal(r.structuredContent.status, "READY"); }
   assert.equal(f.inspect.prepare("SELECT COUNT(*) n FROM sessions").get().n, 1);
@@ -94,7 +107,9 @@ test("same-link two rounds, concurrent identical publish recovery, retained answ
   assert.deepEqual(replay, received, "lost output/restarted stateless call replays same answers/receipt");
   assert.equal((await f.call("grill_finish", { link: prepared.link, expectedRevision: 2 })).isError, true);
   const ack = () => f.call("grill_ack", { link: prepared.link, receipt: received.receipt });
-  assert.equal((await ack()).structuredContent.status, "ACKNOWLEDGED");
+  const acknowledged = (await ack()).structuredContent;
+  assert.equal(acknowledged.status, "ACKNOWLEDGED");
+  assert.match(acknowledged.next, /recompute the design-tree frontier/);
   assert.equal((await ack()).structuredContent.revision, 3, "lost ACK reply retries exact original receipt");
   const cleared = f.inspect.prepare("SELECT * FROM sessions WHERE id=?").get(ids.id);
   assert.equal(cleared.ct, null); assert.equal(cleared.ans_ct, null); assert.equal(cleared.state, "idle");
