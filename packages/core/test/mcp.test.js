@@ -36,7 +36,7 @@ test("notifications get no response", async () => {
 test("tools/list returns the definitions", async () => {
   const tools = grillToolDefs({ mode: "local" }).map((d) => ({ ...d, run: async () => ({ text: "x" }) }));
   const res = await makeHandler(tools).handle({ jsonrpc: "2.0", id: 1, method: "tools/list" });
-  assert.deepEqual(res.result.tools.map((t) => t.name), ["grill_send", "grill_wait", "grill_cancel"]);
+  assert.deepEqual(res.result.tools.map((t) => t.name), ["grill_send", "grill_wait", "grill_cancel", "grill_finish"]);
   assert.ok(res.result.tools.every((t) => !("run" in t) && t.inputSchema && t.description));
   assert.ok(res.result.tools.every((t) => t.annotations.readOnlyHint === false && t.annotations.openWorldHint === true));
 });
@@ -95,14 +95,14 @@ test("grill tool defs: local vs hosted inputs, every type a single string", () =
   };
   for (const mode of ["local", "hosted"]) {
     const defs = grillToolDefs({ mode });
-    assert.equal(defs.length, 3);
+    assert.equal(defs.length, mode === "local" ? 4 : 3);
     for (const d of defs) {
       walk(d.inputSchema, d.name);
       assert.ok(!("run" in d), "defs come without run");
     }
     const wait = defs.find((d) => d.name === "grill_wait");
     if (mode === "local") {
-      assert.deepEqual(Object.keys(wait.inputSchema.properties), ["id", "seconds"]);
+      assert.deepEqual(Object.keys(wait.inputSchema.properties), ["id", "round", "seconds"]);
       assert.deepEqual(wait.inputSchema.required, ["id"]);
     } else {
       assert.deepEqual(Object.keys(wait.inputSchema.properties), ["link", "id", "secret", "seconds"]);

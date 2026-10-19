@@ -86,3 +86,49 @@ export async function waitAnswers(server, id, seconds, { agent, signal } = {}) {
 export async function deleteGrill(server, id, token, { agent, signal } = {}) {
   return request(server, "DELETE", `/api/g/${id}`, { token, agent, signal });
 }
+
+// ── Persistent interview sessions (protocol v2, /api/s). Every authenticated call takes
+// the session's v2 write token; snapshots are the unauthenticated GET below. All functions
+// return the raw { status, json } so callers can implement the exact-retry semantics.
+
+// POST /api/s → 201 snapshot; an exact retry of the current operation answers 200.
+export async function createSession(server, body, { agent, signal } = {}) {
+  return request(server, "POST", "/api/s", { body, ok: [409], agent, signal });
+}
+
+// GET /api/s/:id?after=<revision>&wait=<0..50> → 200 snapshot, 204 unchanged, 404 ended.
+export async function getSessionSnapshot(server, id, { after, waitSeconds = 0, agent, signal } = {}) {
+  const query = `${after !== undefined ? `after=${after}&` : ""}wait=${waitSeconds}`;
+  return request(server, "GET", `/api/s/${id}?${query}`, { waitSeconds, ok: [204, 404], agent, signal });
+}
+
+// POST /api/s/:id/rounds → 201 from idle, 200 exact retry, 409 otherwise.
+export async function publishRound(server, id, token, body, { agent, signal } = {}) {
+  return request(server, "POST", `/api/s/${id}/rounds`, { token, body, ok: [409], agent, signal });
+}
+
+// GET /api/s/:id/rounds/:round/answers?wait=N → 200 blob, 204 pending/idle, 409 other round, 404 ended.
+export async function waitRoundAnswers(server, id, round, seconds, { agent, signal } = {}) {
+  return request(server, "GET", `/api/s/${id}/rounds/${round}/answers?wait=${seconds}`, {
+    waitSeconds: seconds,
+    ok: [204, 409, 404],
+    agent,
+    signal,
+  });
+}
+
+// POST /api/s/:id/rounds/:round/ack {expectedRevision, submissionId} → 204 (also a no-op for an
+// already-acked or superseded round), 409 on a wrong current submission/version.
+export async function ackRound(server, id, round, token, body, { agent, signal } = {}) {
+  return request(server, "POST", `/api/s/${id}/rounds/${round}/ack`, { token, body, ok: [409], agent, signal });
+}
+
+// POST /api/s/:id/finish {expectedRevision} → 204 only for idle with the exact revision, else 409.
+export async function finishSession(server, id, token, body, { agent, signal } = {}) {
+  return request(server, "POST", `/api/s/${id}/finish`, { token, body, ok: [409], agent, signal });
+}
+
+// DELETE /api/s/:id — explicit cancel from any state; 404 throws "gone" like the legacy route.
+export async function deleteSession(server, id, token, { agent, signal } = {}) {
+  return request(server, "DELETE", `/api/s/${id}`, { token, agent, signal });
+}

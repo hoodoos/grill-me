@@ -8,6 +8,10 @@ It's a free, open-source taster for Agent Hub: the same grill UI, without accoun
 
 ## Goals
 
+The additive 0.2.0 persistent-interview extension is specified in
+[docs/SESSION-PROTOCOL.md](docs/SESSION-PROTOCOL.md). It reuses one session link across frontier
+rounds, retains current state only, and preserves the 0.1.0 one-shot paths described below.
+
 - An agent with 2+ questions shows **the formatted questions, followed by “Grill it on your phone” and one
   short link**. You open it on any device and answer by swiping. The answers arrive in the agent's session within a second.
 - **End-to-end encrypted.** The server stores only encrypted data, and in local mode (CLI, plugin, local MCP

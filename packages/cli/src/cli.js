@@ -1,7 +1,7 @@
 // The grill-me command. The library (src/index.js) does the work; this file only parses and prints.
 import fs from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { send, wait, check, resend, cancel } from "./index.js";
+import { send, wait, check, resend, cancel, finish, sendRound } from "./index.js";
 import { isId } from "../../core/src/index.js";
 import { writeOutput } from "./output.js";
 
@@ -11,10 +11,14 @@ const HELP = `grill-me — your agent's questions as swipe cards on your phone
 
 Usage:
   grill-me send [file|-] [--title T] [--qr dark|light|off] [--json]
+  grill-me send --session [file|-] [--json]      start a persistent interview session (round 1)
+  grill-me send --id ID --round N [--revision V] [file|-] [--json]
+                                                  publish the next round on that session
   grill-me wait <id>
   grill-me fetch <id>
   grill-me resend <id> [--qr dark|light|off] [--json]
   grill-me cancel <id>
+  grill-me finish <id>                           end an idle interview session
   grill-me mcp
 
 Options:
@@ -22,7 +26,9 @@ Options:
   --help         show this help
   --version      show the version
 
-send reads stdin when no file is given and stdin isn't a terminal.`;
+send reads stdin when no file is given and stdin isn't a terminal.
+Interview sessions reuse one link across rounds: create with --session, then publish
+each next round with --id/--round, collect answers with wait/fetch, and end with finish.`;
 
 class UsageError extends Error {}
 
@@ -66,6 +72,33 @@ function withinPhrase(expiresAt) {
 }
 
 function printSend(out, result) {
+  if (result.status === "PUBLISHING") {
+    // Ambiguous create/publish: visibly UNCONFIRMED. The link is a recovery identity, not a
+    // ready phone link; the exact same command resumes the saved publication intent.
+    out(`Grill Me: ${result.count} question${result.count === 1 ? "" : "s"}, round ${result.round} — publication UNCONFIRMED (no confirmed server reply).`);
+    out("Do not present the phone as ready. Retry the same questions with this saved identity:");
+    out(`  grill-me send --id ${result.id} --round ${result.round}   (same questions)`);
+    out(`Recovery identity: ${result.link}`);
+    out("");
+    out(`id: ${result.id}`);
+    out(`round: ${result.round}`);
+    out("STATUS: PUBLISHING");
+    return;
+  }
+  if (result.session) {
+    if (result.state === "idle") {
+      out(`Round ${result.round} publication is confirmed and already collected. Publish the next ready frontier or finish this session.`);
+      out(`id: ${result.id}`);
+      out(`STATUS: IDLE`);
+      return;
+    }
+    out(`Grill Me: ${result.count} question${result.count === 1 ? "" : "s"}, round ${result.round}, answer within ${withinPhrase(result.expiresAt)}.`);
+    out(result.link);
+    out("");
+    out(`id: ${result.id}`);
+    out(`round: ${result.round}`);
+    return;
+  }
   out(`Grill Me: ${result.count} question${result.count === 1 ? "" : "s"}, answer within ${withinPhrase(result.expiresAt)}.`);
   out(result.link);
   out("");
@@ -99,17 +132,38 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
           title: { type: "string" },
           qr: { type: "string" },
           json: { type: "boolean" },
+          session: { type: "boolean" },
+          id: { type: "string" },
+          round: { type: "string" },
+          revision: { type: "string" },
           ...serverOpt,
         });
         if (values.qr !== undefined && !["dark", "light", "off"].includes(values.qr)) {
           throw new UsageError("--qr must be dark, light or off");
+        }
+        if (values.session && (values.id !== undefined || values.round !== undefined)) {
+          throw new UsageError("--session creates a new session; it cannot be combined with --id/--round");
+        }
+        if (values.id !== undefined && values.round === undefined) {
+          throw new UsageError("publishing on a session needs --id with --round");
+        }
+        if (values.round !== undefined && values.id === undefined) {
+          throw new UsageError("--round needs --id (use --session to start a new session)");
         }
         const [file] = positionals;
         let input;
         if (file && file !== "-") input = await fs.readFile(file, "utf8");
         else if (!file && stdin.isTTY) throw new UsageError("send needs a file, -, or piped stdin");
         else input = await readStdin(stdin);
-        const result = await send(input, { title: values.title, server: values.server, qr: values.qr ?? "off" });
+        const sessionMode = values.session || values.id !== undefined;
+        const result = sessionMode
+          ? await sendRound(input, {
+              id: values.id,
+              round: values.round !== undefined ? Number(values.round) : undefined,
+              expectedRevision: values.revision !== undefined ? Number(values.revision) : undefined,
+              server: values.server,
+            })
+          : await send(input, { title: values.title, server: values.server, qr: values.qr ?? "off" });
         if (values.json) out(JSON.stringify(result, null, 2));
         else printSend(out, result);
         return 0;
@@ -135,15 +189,33 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
         }
         switch (result.status) {
           case "EXPIRED":
-            out(`The grill expired before it was answered. Send it again with: npx -y grill-me-ai resend ${id}`);
+            if (result.session) out("The session ended or expired.");
+            else out(`The grill expired before it was answered. Send it again with: npx -y grill-me-ai resend ${id}`);
             break;
           case "OFFLINE":
             out(`Couldn't reach grill-me.ai for 5 minutes. The answers stay there for up to an hour; check again with: npx -y grill-me-ai fetch ${id}`);
             break;
           case "WAITING":
-            out("No answers yet.");
+            out(result.message ?? "No answers yet.");
+            break;
+          case "IDLE":
+            out(`${result.message}. Publish the next frontier round with: npx -y grill-me-ai send --id ${id} --round ${result.round + 1} — or, after confirming shared understanding, end with: npx -y grill-me-ai finish ${id}`);
+            break;
+          case "CONFLICT":
+          case "PUBLISHING":
+            out(result.message ?? "The local record and the session disagree; re-check with fetch.");
             break;
         }
+        out(`STATUS: ${result.status}`);
+        return 0;
+      }
+
+      case "finish": {
+        const { values, positionals } = parse(rest, { ...serverOpt }, { takesId: true });
+        const [id] = positionals;
+        const result = await finish(id, { server: values.server });
+        if (result.status === "EXPIRED") out("The session ended or expired.");
+        else out(`Finished ${id}.`);
         out(`STATUS: ${result.status}`);
         return 0;
       }
@@ -198,6 +270,10 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
       return 2;
     }
     if (error.code === "unknown-id") {
+      err(`grill-me: ${error.message}`);
+      return 2;
+    }
+    if (["not-session", "usage", "stale-round", "conflict", "unconfirmed", "uncollected", "pending-round", "gone"].includes(error.code)) {
       err(`grill-me: ${error.message}`);
       return 2;
     }

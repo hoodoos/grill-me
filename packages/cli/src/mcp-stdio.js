@@ -3,7 +3,7 @@
 // Messages are handled concurrently, so a waiting grill_wait never blocks ping or another call.
 import fs from "node:fs/promises";
 import { createMcpHandler, grillToolDefs, clientAgent } from "../../core/src/index.js";
-import { send, wait, cancel } from "./index.js";
+import { send, sendRound, wait, cancel, finish } from "./index.js";
 import { writeOutput } from "./output.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -18,7 +18,12 @@ const INSTRUCTIONS =
   "ask a single question in chat. Follow Matt Pocock’s complete grilling skill below, including its exact format. " +
   "Show every question in full, then end your reply " +
   "with 'Grill it on your phone' and the returned link as plain text. Do not print a QR code. " +
-  "Then call grill_wait with the id. If the user answers in chat instead, call grill_cancel.\n\n" +
+  "For an interview use session:true on grill_send, retain its explicit id and publish subsequent ready " +
+  "frontier rounds with that id and the next round number. Never silently attach another interview. " +
+  "The same phone link waits and updates automatically. PUBLISHING is unconfirmed: retry the exact saved " +
+  "id/round/questions rather than creating another session or claiming the phone is ready. " +
+  "Then call grill_wait with the id. After shared-understanding confirmation call grill_finish. " +
+  "If the user answers in chat instead, call grill_cancel.\n\n" +
   "Matt Pocock’s complete grilling skill (MIT):\n\n" + GRILLING;
 
 // GRILL_ME_WAIT_SECONDS is both the default and, when set, the cap: each client sets it to fit
@@ -47,8 +52,9 @@ const STATUS_TEXT = {
 const waitResult = (result) => ({
   text: result.status === "ANSWERS"
     ? `${result.lines}\nSTATUS: ANSWERS`
-    : `${STATUS_TEXT[result.status]}\nSTATUS: ${result.status}`,
-  structured: { status: result.status, ...(result.lines ? { answers: result.lines } : {}) },
+    : `${result.message ?? STATUS_TEXT[result.status] ?? result.status}\nSTATUS: ${result.status}`,
+  structured: { status: result.status, ...(result.lines ? { answers: result.lines } : {}),
+    ...Object.fromEntries(["session", "id", "round", "revision", "state", "submissionId", "link"].filter(k => result[k] !== undefined).map(k => [k, result[k]])) },
 });
 
 function localTools(env) {
@@ -60,9 +66,11 @@ function localTools(env) {
       if (hasGrill === hasText) throw new Error("pass exactly one of grill / text");
       let result;
       try {
-        result = await send(hasGrill ? args.grill : args.text, {
+        if (args.session !== undefined && typeof args.session !== "boolean") throw new Error("session must be boolean");
+        result = await (args.session || args.id !== undefined ? sendRound : send)(hasGrill ? args.grill : args.text, {
           title: args.title,
           agent: clientAgent(ctx.clientInfo),
+          id: args.id, round: args.round, expectedRevision: args.expectedRevision, signal: ctx.signal,
         });
       } catch (err) {
         if (err.code === "input") {
@@ -70,12 +78,14 @@ function localTools(env) {
         }
         throw err;
       }
+      if (result.status === "PUBLISHING") return { text: `UNCONFIRMED publication. ${result.message}\nDo not present the phone as ready. Retry this saved id/round with the same questions.\nSTATUS: PUBLISHING`, structured: result };
+      if (result.state === "idle") return { text: "Publication confirmed; this round has already been collected. Publish the next ready frontier with this id or finish after confirmation.\nSTATUS: IDLE", structured: result };
       return {
         text:
           `Show the complete frontier round in Matt Pocock’s exact grilling format, then end your reply with:\n\n` +
           `Grill it on your phone\n${result.link}\n\n` +
           `Then call grill_wait with id "${result.id}".`,
-        structured: { id: result.id, link: result.link, count: result.count, expiresAt: result.expiresAt },
+        structured: Object.fromEntries(Object.entries(result).filter(([key]) => key !== "qr")),
       };
     },
 
@@ -83,6 +93,7 @@ function localTools(env) {
       const seconds = waitSeconds(args.seconds, waitCfg);
       const result = await wait(String(args.id ?? ""), {
         seconds,
+        round: args.round,
         agent: clientAgent(ctx.clientInfo),
         signal: ctx.signal,
       });
@@ -94,6 +105,10 @@ function localTools(env) {
       const id = String(args.id ?? "");
       await cancel(id, { agent: clientAgent(ctx.clientInfo) });
       return { text: `Cancelled ${id}.`, structured: { status: "CANCELLED" } };
+    },
+    grill_finish: async (args, ctx) => {
+      const result = await finish(String(args.id ?? ""), { expectedRevision: args.expectedRevision, agent: clientAgent(ctx.clientInfo), signal: ctx.signal });
+      return { text: `Session ${result.status.toLowerCase()}.`, structured: result };
     },
   };
   return grillToolDefs({ mode: "local", waitSeconds: waitCfg }).map((def) => ({ ...def, run: runs[def.name] }));

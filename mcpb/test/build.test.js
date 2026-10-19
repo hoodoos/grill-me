@@ -76,6 +76,6 @@ test(
     });
     assert.equal(replies[0].result.serverInfo.name, "grill-me");
     const tools = replies[1].result.tools.map((tool) => tool.name).sort();
-    assert.deepEqual(tools, ["grill_cancel", "grill_send", "grill_wait"]);
+    assert.deepEqual(tools, ["grill_cancel", "grill_finish", "grill_send", "grill_wait"]);
   },
 );

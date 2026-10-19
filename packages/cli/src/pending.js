@@ -54,11 +54,95 @@ export async function readPending(home, id) {
   }
 }
 
+// Cross-process bakery lock: unique pid/nonce generations publish tickets, then wait
+// for earlier contenders. Missing tickets mean choosing. Only ESRCH proves death.
+// No shared pathname is unlinked, avoiding stale-reaper/new-owner ABA races.
+const lockCheck = (signal, ready) => {
+  if (signal?.aborted || (ready && !ready())) {
+    const err = new Error(signal?.aborted ? "the wait was cancelled" : "the wait deadline elapsed");
+    err.code = signal?.aborted ? "aborted" : "deadline";
+    throw err;
+  }
+};
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return err?.code !== "ESRCH"; }
+}
+export async function withRecordLock(home, id, { signal, ready } = {}, fn) {
+  const dir = pendingDir(home), prefix = `.${id}.lock.`;
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  lockCheck(signal, ready);
+  const name = prefix + process.pid + "." + randomUUID();
+  const mine = path.join(dir, name);
+  await fs.mkdir(mine, { mode: 0o700 });
+  const peers = async () => {
+    const found = [];
+    for (const other of await fs.readdir(dir)) {
+      if (!other.startsWith(prefix)) continue;
+      const match = /^(\d+)\.([0-9a-f-]{36})$/.exec(other.slice(prefix.length));
+      if (!match) continue;
+      if (!pidAlive(Number(match[1]))) {
+        await fs.rm(path.join(dir, other), { recursive: true, force: true }).catch(() => {});
+        continue;
+      }
+      let ticket = null;
+      try { ticket = Number(await fs.readFile(path.join(dir, other, "ticket"), "utf8")); }
+      catch (err) { if (err.code !== "ENOENT") throw err; }
+      found.push({ name: other, ticket });
+    }
+    return found;
+  };
+  try {
+    const ticket = 1 + Math.max(0, ...(await peers()).map(p => Number.isSafeInteger(p.ticket) ? p.ticket : 0));
+    if (!Number.isSafeInteger(ticket)) throw new Error("record lock ticket overflow");
+    const tmp = path.join(mine, "ticket.tmp");
+    await fs.writeFile(tmp, String(ticket), { flag: "wx", mode: 0o600 });
+    await fs.rename(tmp, path.join(mine, "ticket"));
+    for (;;) {
+      lockCheck(signal, ready);
+      const blocked = (await peers()).some(p => p.name !== name &&
+        (p.ticket === null || p.ticket < ticket || (p.ticket === ticket && p.name < name)));
+      if (!blocked) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    lockCheck(signal, ready);
+    return await fn();
+  } finally {
+    await fs.rm(mine, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+
+// mutatePending(home, id, mutator, { signal, ready }) → { record, next }. The mutator receives
+// the freshly-read record (or null when absent) and returns the record to persist — or null to
+// leave disk untouched. Returning a record stamps a new local `version`/`updatedAt`; saving runs
+// through the per-process write chain, so same-process writes stay ordered too.
+export async function mutatePending(home, id, mutator, { signal, ready } = {}) {
+  return withRecordLock(home, id, { signal, ready }, async () => {
+    const record = await readPending(home, id);
+    const next = await mutator(record);
+    if (next === null || next === undefined) return { record, next: null };
+    const stamped = { ...next, version: (record?.version ?? 0) + 1, updatedAt: new Date().toISOString() };
+    await savePending(home, stamped);
+    return { record, next: stamped };
+  });
+}
+
+// removePendingGuarded(home, id, predicate, opts) — unlinks only while the predicate accepts
+// the fresh record, so a late cleanup cannot delete a record another process advanced.
+export async function removePendingGuarded(home, id, predicate = () => true, opts = {}) {
+  return withRecordLock(home, id, opts, async () => {
+    const record = await readPending(home, id);
+    if (predicate(record)) await fs.rm(pendingPath(home, id), { force: true });
+    return record;
+  });
+}
+
 export async function removePending(home, id) {
   await fs.rm(pendingPath(home, id), { force: true });
 }
 
-export async function prunePending(home, { now = Date.now() } = {}) {
+export async function prunePending(home, { now = Date.now(), signal, ready } = {}) {
   let names;
   try {
     names = await fs.readdir(pendingDir(home));
@@ -72,16 +156,31 @@ export async function prunePending(home, { now = Date.now() } = {}) {
     try {
       let createdAt = NaN;
       try {
-        createdAt = Date.parse(JSON.parse(await fs.readFile(file, "utf8")).createdAt);
+        const record = JSON.parse(await fs.readFile(file, "utf8"));
+        // v2 session records prune by last local activity: an active interview outlives
+        // its creation date, while abandoned local state still expires after 3 days.
+        createdAt = Date.parse(record.v === 2 ? (record.updatedAt ?? record.createdAt) : record.createdAt);
       } catch {
         /* fall back to mtime */
       }
       if (Number.isNaN(createdAt)) createdAt = (await fs.stat(file)).mtimeMs;
       if (now - createdAt > PRUNE_AFTER_MS) {
-        await fs.rm(file, { force: true });
-        pruned++;
+        // Re-read under the same interprocess lock as acknowledgements/publications:
+        // activity after this scan must not be erased by a stale pruning decision.
+        let removed = false;
+        await withRecordLock(home, name.slice(0, -5), { signal, ready }, async () => {
+          const fresh = await readPending(home, name.slice(0, -5));
+          if (!fresh) return;
+          const stamp = Date.parse(fresh.v === 2 ? (fresh.updatedAt ?? fresh.createdAt) : fresh.createdAt);
+          const ageFrom = Number.isNaN(stamp) ? (await fs.stat(file)).mtimeMs : stamp;
+          if (now - ageFrom <= PRUNE_AFTER_MS) return;
+          await fs.rm(file, { force: true });
+          removed = true;
+        });
+        if (removed) pruned++;
       }
-    } catch {
+    } catch (err) {
+      if (err.code === "aborted" || err.code === "deadline") throw err;
       /* a file that can't be read or removed is left alone */
     }
   }

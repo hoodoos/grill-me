@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "grill-me",
   "display_name": "Grill Me",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Your agent's questions as swipe cards on your phone, end-to-end encrypted. Answers land back in the session.",
   "author": {
     "name": "hoodoos"
@@ -19,7 +19,9 @@
     "entry_point": "server/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/index.js"],
+      "args": [
+        "${__dirname}/server/index.js"
+      ],
       "env": {
         "GRILL_ME_WAIT_SECONDS": "180",
         "GRILL_ME_AGENT": "claude-desktop"
@@ -27,12 +29,29 @@
     }
   },
   "tools": [
-    { "name": "grill_send", "description": "Ask the user questions as swipe cards on their phone." },
-    { "name": "grill_wait", "description": "Wait for the user's answers to a grill." },
-    { "name": "grill_cancel", "description": "Cancel a grill, e.g. when the user answered in chat." }
+    {
+      "name": "grill_send",
+      "description": "Ask the user questions as swipe cards on their phone."
+    },
+    {
+      "name": "grill_wait",
+      "description": "Wait for the user's answers to a grill."
+    },
+    {
+      "name": "grill_cancel",
+      "description": "Cancel a grill, e.g. when the user answered in chat."
+    },
+    {
+      "name": "grill_finish",
+      "description": "Finish an idle interview after confirming shared understanding."
+    }
   ],
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=22"
     }

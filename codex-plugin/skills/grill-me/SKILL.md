@@ -26,7 +26,12 @@ depend on other unresolved questions in this round.
 
 ## 2. Send the grill
 
-Call `grill_send` with exactly the questions (not your whole reply) as `text`. Show all the
+Start the interview with `grill_send` using `session:true` and exactly the questions
+(not your whole reply) as `text`. Retain its explicit `id` and `round` for this interview.
+For each subsequent ready frontier, call `grill_send` with that same `id`, `session:true`,
+the next `round` and the full new questions as `text`. Never attach an unrelated interview
+to a global/latest session. The open phone waits and updates on the same link automatically.
+Show all the
 formatted questions in your reply, then end with:
 
 ```text
@@ -35,7 +40,9 @@ Grill it on your phone
 ```
 
 Use the real link as plain text, without a code block. Do not print a QR code. Keep the `id`
-for `grill_wait` and `grill_cancel`; it is not part of the user-facing footer.
+for `grill_wait`, subsequent rounds, `grill_finish` and `grill_cancel`; it is not part of the user-facing footer.
+On `PUBLISHING`, the upload is UNCONFIRMED: retry the exact returned id/round and same questions.
+Do not claim the phone is ready or create another session to recover an ambiguous upload.
 
 ## 3. Wait for the answers
 
@@ -44,14 +51,21 @@ Call `grill_wait` with the `id`. It waits for the answers and returns a status:
 - `ANSWERS` — the answer lines follow: `Q<n> - agree` (the ➡️), `Q<n> - <choice name>`,
   `Q<n> - skip for now, ask again later`, or the user's own words. Carry on with them.
 - `WAITING` — no answers yet. Call `grill_wait` again with the same arguments.
-- `EXPIRED` — say "The grill expired. Want me to send it again?" and on yes call `grill_send`
-  with the same questions (new link, the phone keeps its progress).
+- `IDLE` — this round has been collected. Compute and publish the next ready frontier using
+  the same id and the next round number, or finish after the required confirmation.
+- `EXPIRED` — the session ended or expired. Offer a new session for the current frontier;
+  do not claim that the old phone draft or history will resume.
 - `OFFLINE` — say "Couldn't reach grill-me.ai. Paste the answers from Copy answers, or say 'check
   grill'." On "check grill", call `grill_wait` again.
 
 ## 4. If the user answers in the chat first
 
 Call `grill_cancel` with the `id` and carry on with what they said.
+
+After Matt's shared-understanding confirmation, call `grill_finish` with this id. It refuses
+pending questions and uncollected answers. Cancellation explicitly aborts any current round.
+The relay and phone keep only the current round, not the interview history; retain history
+in the agent conversation. Ordinary API/CLI one-shot calls remain compatible.
 
 ## Credit and source
 

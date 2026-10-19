@@ -1,6 +1,6 @@
 {
   "name": "grill-me-ai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Your coding agent's questions as swipe cards on your phone, end-to-end encrypted. Answers land back in the agent's session.",
   "license": "MIT",
   "type": "module",

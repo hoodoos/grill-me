@@ -4,3 +4,5 @@ export { ApiError, userAgent, createGrill, getGrill, waitAnswers, deleteGrill } 
 export { savePending, readPending, removePending, prunePending } from "./pending.js";
 export { qrText } from "./qr.js";
 export { send, wait, check, resend, cancel } from "./grill.js";
+export { sendRound } from "./session.js";
+export { finishSession as finish } from "./session.js";

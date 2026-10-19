@@ -88,9 +88,13 @@ const SEND_DESCRIPTION =
   "(the structured format) or text (Matt’s format: '❓ **Q1** - **<title>**: <body>', a '➡️ <recommendation>' " +
   "line, questions separated by ---). Show the complete frontier round in full in your " +
   "reply, then end with 'Grill it on your phone' and the returned link as plain text. Do not print a QR code. " +
-  "Then call grill_wait with the id to collect the answers.";
+  "Then call grill_wait with the id to collect the answers. " +
+  "For the next frontier round of an interview, call grill_send again with session:true, the saved id and the " +
+  "explicit next round number; the phone keeps the same link. A PUBLISHING result means the round is " +
+  "UNCONFIRMED: retry with the same id, round and questions — never create a new session. " +
+  "End the interview with grill_finish only after the shared-understanding confirmation.";
 
-// grillToolDefs({ mode: "local" | "hosted", waitSeconds?: { default, max } }) → the three tool
+// grillToolDefs({ mode: "local" | "hosted", waitSeconds?: { default, max } }) → tool
 // definitions, without run. waitSeconds fills the real numbers into the local seconds description.
 export function grillToolDefs({ mode, waitSeconds }) {
   if (mode !== "local" && mode !== "hosted") throw new Error('mode must be "local" or "hosted"');
@@ -109,6 +113,29 @@ export function grillToolDefs({ mode, waitSeconds }) {
           description: "The questions in grill text format. Exactly one of grill / text is required.",
         },
         title: { type: "string", description: "Optional short name for the whole grill." },
+        ...(hosted
+          ? {}
+          : {
+              session: {
+                type: "boolean",
+                description:
+                  "Start or continue a persistent interview session (default false: a one-shot grill). " +
+                  "With session:true and no id, starts a new session at round 1. With the saved id, " +
+                  "publishes the explicit next round on that session (round is required).",
+              },
+              id: {
+                type: "string",
+                description: "A saved session id from an earlier grill_send: reuse that session, never start a new one.",
+              },
+              round: {
+                type: "integer",
+                description: "The explicit next round number when reusing a session id (current round + 1).",
+              },
+              expectedRevision: {
+                type: "integer",
+                description: "Optional expected current revision; it must match the session's idle revision.",
+              },
+            }),
       },
     },
     annotations: { ...TRUTHFUL },
@@ -121,7 +148,11 @@ export function grillToolDefs({ mode, waitSeconds }) {
       "Wait up to seconds for the user to answer on their phone. On WAITING, call again with the same " +
       "arguments. On ANSWERS, the answer lines follow ('Q<n> - …'). EXPIRED means the grill is gone — offer to " +
       "send it again with grill_send." +
-      (hosted ? "" : " OFFLINE means grill-me.ai can't be reached; the answers stay on the server for an hour."),
+      (hosted
+        ? ""
+        : " OFFLINE means grill-me.ai can't be reached; the answers stay on the server for an hour. " +
+          "For a session id, waits on the id's current round unless round is given; IDLE means that round was " +
+          "already collected — publish the next round or finish the session instead of waiting again."),
     inputSchema: {
       type: "object",
       properties: hosted
@@ -132,7 +163,11 @@ export function grillToolDefs({ mode, waitSeconds }) {
             seconds: { type: "integer", description: "How long to wait (default 45, capped)." },
           }
         : {
-            id: { type: "string", description: "The grill id from grill_send." },
+            id: { type: "string", description: "The grill or session id from grill_send." },
+            round: {
+              type: "integer",
+              description: "Session only: wait on this round instead of the id's current round.",
+            },
             seconds: {
               type: "integer",
               description: waitSeconds
@@ -167,7 +202,17 @@ export function grillToolDefs({ mode, waitSeconds }) {
     annotations: { ...TRUTHFUL },
   };
 
-  return [send, wait, cancel];
+  const finish = {
+    name: "grill_finish",
+    title: "Finish an interview",
+    description: "End this explicit session after confirming shared understanding. Only an idle session with collected answers can finish; pending questions or uncollected answers are refused.",
+    inputSchema: { type: "object", properties: {
+      id: { type: "string", description: "The saved interview session id." },
+      expectedRevision: { type: "integer", description: "Optional exact idle revision." },
+    }, required: ["id"] },
+    annotations: { ...TRUTHFUL },
+  };
+  return hosted ? [send, wait, cancel] : [send, wait, cancel, finish];
 }
 
 // clientAgent(clientInfo) maps the MCP clientInfo.name onto the metrics allowlist.
