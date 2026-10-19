@@ -133,7 +133,7 @@ function message(text) {
   $("screen-message").classList.remove("session-thinking");
   $("thinking-stack")?.remove();
   const home = $("screen-message").querySelector("a");
-  if (home) home.textContent = "Grill Me";
+  if (home) { home.textContent = "Grill Me"; home.parentElement.hidden = false; }
   $("message-text").textContent = text;
   show("screen-message");
 }
@@ -147,7 +147,7 @@ const waiting = () => {
   for (let i = 0; i < 3; i++) stack.append(document.createElement("span"));
   screen.prepend(stack);
   const home = screen.querySelector("a");
-  if (home) home.textContent = "Back to Grill Me";
+  if (home) home.parentElement.hidden = true;
 };
 function pauseThinking() {
   if (!$("screen-message").hidden && $("screen-message").classList.contains("session-thinking")) {

@@ -92,7 +92,7 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
     await page.setViewportSize({ width, height });
     const bounds = await page.evaluate(() => {
       const stack = document.getElementById("thinking-stack");
-      const rects = [stack, document.getElementById("message-text"), document.querySelector(".session-thinking a")].map(el => {
+      const rects = [stack, document.getElementById("message-text")].map(el => {
         const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
       });
       return { rects, width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight,
@@ -101,8 +101,7 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
     assert.equal(bounds.width, width); assert.equal(bounds.height, height);
     assert.ok(bounds.rects.every(r => r.left >= 0 && r.right <= width && r.top >= 0 && r.bottom <= height));
     assert.equal(bounds.animations.length, 3); assert.ok(bounds.animations.every(a => a.state === "running" && a.iterations === Infinity));
-    const link = page.getByRole("link", { name: "Back to Grill Me", exact: true });
-    assert.equal(await link.getAttribute("href"), "/");
+    assert.equal(await page.locator(".session-thinking a:visible").count(), 0);
     assert.equal(await page.locator("#thinking-stack").getAttribute("aria-hidden"), "true");
     assert.equal(await page.locator("#thinking-stack a, #thinking-stack button").count(), 0);
     geometry.push({ width, height, rects: bounds.rects }); await screenshots(`thinking-${width}x${height}`);
@@ -120,6 +119,7 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
   const second = await wait(session.id, { ...opts, seconds: 10 }); assert.equal(second.lines, "Q1 - agree"); await second.ack();
   await text(thinking);
   await finish(session.id, opts); await text(finished);
+  assert.equal(await page.getByRole("link", { name: "Grill Me", exact: true }).isVisible(), true);
   assert.equal(await page.locator("#thinking-stack").count(), 0); await screenshots("finished");
   await other.locator("#message-text").filter({ hasText: finished }).waitFor();
   await other.evaluate(() => { oldInput.value = "late stale plaintext"; oldInput.dispatchEvent(new Event("input", { bubbles: true })); });
@@ -185,7 +185,7 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
   await page.reload(); await text("Session ended or expired.");
   assert.deepEqual(errors, []);
   for (const url of ["/entry-020.js", "/session-app.js"]) assert.ok(requests.some(r => r.phase === 1 && r.url === url));
-  for (const url of ["/entry-020.js?v=terminal-1", "/session-app.js?v=terminal-1"]) assert.ok(requests.some(r => r.phase === 2 && r.url === url));
+  for (const url of ["/entry-020.js?v=waiting-2", "/session-app.js?v=waiting-2"]) assert.ok(requests.some(r => r.phase === 2 && r.url === url));
   assert.ok(requests.some(r => r.phase === 1 && r.url === "/style.css?v=c0fdf4f95f99"));
   assert.ok(requests.some(r => r.phase === 2 && r.url.startsWith("/style.css?v=") && r.url !== "/style.css?v=c0fdf4f95f99"));
   assert.equal(requests.some(r => r.phase === 2 && ["/entry-020.js", "/session-app.js", "/core/session.js", "/ui/grill.js", "/ui/grill.css"].includes(r.url)), false,
