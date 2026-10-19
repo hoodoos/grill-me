@@ -1,0 +1,86 @@
+/* Grill Me swipe cards, extracted from Agent Hub's grill page. Scoped under .gm-root so nothing
+   leaks into a host page. Light and dark follow the device (prefers-color-scheme). */
+.gm-root {
+  color-scheme: light;
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5f6b7a; --line: #e2e6eb; --chip: #eef1f4;
+  --accent: #3b5bdb; --warn: #c2410c; --warn-bg: #fff4ec; --ok: #2f9e44; --ok-bg: #ebfbee;
+  --err: #c92a2a; --code: #f1f3f5; --on-accent: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  .gm-root {
+    color-scheme: dark;
+    --bg: #111418; --panel: #1a1e24; --ink: #e6e9ed; --muted: #97a1ad; --line: #2b313a; --chip: #232931;
+    --accent: #7c96ff; --warn: #ff9f5a; --warn-bg: #2a1d14; --ok: #51cf66; --ok-bg: #15241a;
+    --err: #ff6b6b; --code: #0f1215; --on-accent: #111418;
+  }
+}
+.gm-root, .gm-root * { box-sizing: border-box; }
+.gm-root {
+  /* The host supplies a bounded height; the UI fills that space, including embedded panels. */
+  display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden;
+  background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.gm-root button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 5px 10px; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) {
+  .gm-root button:hover { border-color: var(--accent); }
+}
+.gm-root button, .gm-root a, .gm-root summary { touch-action: manipulation; }
+.gm-root button:disabled { opacity: .5; cursor: default; }
+.gm-root .gm-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.gm-root textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; }
+.gm-root code { font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; background: var(--code); padding: 1px 4px; border-radius: 4px; }
+.gm-root .gm-meta { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+.gm-root .gm-spacer { flex: 1; }
+.gm-root .gm-row { display: flex; gap: 8px; align-items: center; }
+.gm-root [hidden] { display: none !important; }
+
+.gm-root .gm-md { overflow-wrap: anywhere; white-space: pre-wrap; }
+.gm-root summary.gm-meta { cursor: pointer; }
+
+.gm-top { display: flex; align-items: center; gap: 8px; padding: calc(10px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 10px calc(16px + env(safe-area-inset-left)); border-bottom: 1px solid var(--line); background: var(--panel); }
+.gm-top .gm-title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gm-top .gm-listbtn { padding: 2px 8px; font-size: 12px; }
+.gm-progress { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.gm-top, .gm-bar { flex-shrink: 0; }
+
+/* 24 px on each side keeps swipes away from the screen edges, where Android's back gesture lives. */
+.gm-stage { flex: 1; min-height: 0; min-width: 0; display: flex; padding: 14px 24px 8px; }
+.gm-card { position: relative; flex: 1; min-height: 0; min-width: 0; width: 100%; max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 24px rgba(0, 0, 0, .1); user-select: none; -webkit-user-select: none; transition: transform .25s ease, opacity .25s ease; }
+.gm-card, .gm-card * { touch-action: pan-y; }
+.gm-card.dragging { transition: none; }
+.gm-card.enter { transform: scale(.96); opacity: 0; }
+.gm-scroll { flex: 1; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 16px; }
+.gm-n { font-size: 12px; font-weight: 700; color: var(--muted); }
+.gm-qtitle { font-size: 18px; font-weight: 650; margin: 2px 0 10px; overflow-wrap: anywhere; }
+.gm-rec { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--ok-bg); }
+.gm-rec-h { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ok); margin-bottom: 4px; }
+.gm-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.gm-root .gm-chip { border-radius: 999px; text-align: left; max-width: 100%; }
+.gm-choice { width: 100%; text-align: left; border-radius: 10px; padding: 8px 10px; }
+.gm-choice-name { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.gm-choice-detail { display: block; color: var(--muted); font-size: 13px; margin-top: 1px; overflow-wrap: anywhere; }
+.gm-choice-context { margin: 12px 0 0; padding-left: 20px; }
+.gm-choice-context li { margin: 6px 0; overflow-wrap: anywhere; }
+.gm-choice-context .gm-choice-detail { display: inline; color: inherit; font-size: inherit; margin: 0; }
+.gm-choices button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.gm-choices button.on .gm-choice-detail { color: inherit; opacity: .8; }
+.gm-multi-next { margin-top: 4px; }
+.gm-mine { margin-top: 12px; font-size: 13px; color: var(--accent); font-weight: 600; overflow-wrap: anywhere; }
+.gm-stamp { position: absolute; top: 16px; z-index: 1; padding: 3px 10px; border: 3px solid; border-radius: 8px; font-weight: 800; font-size: 20px; letter-spacing: .06em; opacity: 0; pointer-events: none; background: var(--panel); }
+.gm-stamp.agree { left: 16px; color: var(--ok); transform: rotate(-12deg); }
+.gm-stamp.own { right: 16px; color: var(--warn); transform: rotate(12deg); }
+.gm-text { display: flex; flex-direction: column; min-height: 0; flex-shrink: 1; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+.gm-text textarea { font-size: 16px; display: block; flex: 1; width: 100%; height: 96px; min-height: 48px; resize: vertical; user-select: text; -webkit-user-select: text; }
+.gm-text .gm-row { flex-shrink: 0; margin-top: 8px; }
+.gm-bar { display: flex; gap: 10px; justify-content: center; align-items: center; padding: 8px 16px calc(14px + env(safe-area-inset-bottom)); }
+.gm-bar button { min-width: 52px; min-height: 46px; border-radius: 999px; }
+.gm-bar .gm-no, .gm-bar .gm-yes { font-size: 22px; line-height: 1; width: 58px; }
+.gm-bar .gm-no { color: var(--warn); } .gm-bar .gm-yes { color: var(--ok); }
+.gm-bar .gm-send { flex: 1; max-width: 420px; font-weight: 700; }
+.gm-list { flex: 1; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; width: 100%; max-width: 600px; margin: 0 auto; padding: 14px 16px; }
+.gm-qrow { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; padding: 10px 12px; margin-bottom: 6px; border-radius: 10px; }
+.gm-qrow .gm-q { font-weight: 600; overflow-wrap: anywhere; }
+.gm-qrow .gm-a { color: var(--muted); overflow-wrap: anywhere; } .gm-qrow .gm-a.skip { color: var(--warn); }
+.gm-qrow.here { border-color: var(--accent); }
+.gm-note { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); font-size: 13px; overflow-wrap: anywhere; }

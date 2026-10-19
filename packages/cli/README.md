@@ -4,6 +4,8 @@ Your coding agent has questions. Grill Me turns them into swipe cards on your ph
 go straight back into the agent's session, and **grill-me.ai can't read any of it** — the grill and
 the answers are end-to-end encrypted with a key that only lives in the link.
 
+To set it up in Claude Code, tell your agent: Install Grill Me from https://grill-me.ai/install
+
 ```
 npx -y grill-me-ai send questions.md   # converts, encrypts, uploads; prints a link and a QR code
 npx -y grill-me-ai wait <id>           # long-polls until the answers arrive, then deletes the grill

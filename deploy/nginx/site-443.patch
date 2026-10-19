@@ -1,0 +1,22 @@
+# The change to /etc/nginx/sites-available/grill-me.ai: add one include line to the 443 server
+# block, replacing the placeholder's own "location /". This unified diff is illustrative, against
+# a typical certbot-managed file — deploy.sh applies the change BY PATTERN (find the server block
+# with "listen 443 ssl" and "server_name grill-me.ai", drop its "location /" block, insert the
+# include), because the live file may differ slightly. Do not apply with patch(1).
+--- a/etc/nginx/sites-available/grill-me.ai
++++ b/etc/nginx/sites-available/grill-me.ai
+@@ -1,8 +1,5 @@
+ server {
+     server_name grill-me.ai;
+     root /var/www/grill-me.ai;
+     index index.html;
+-    location / {
+-        try_files $uri $uri/ =404;
+-    }
++    include /etc/nginx/snippets/grill-me.ai-locations.conf;
+     listen 443 ssl; # managed by Certbot
+     ssl_certificate /etc/letsencrypt/live/grill-me.ai/fullchain.pem; # managed by Certbot
+     ssl_certificate_key /etc/letsencrypt/live/grill-me.ai/privkey.pem; # managed by Certbot
+     include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+ }
