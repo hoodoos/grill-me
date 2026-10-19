@@ -74,7 +74,9 @@ npx grill-me-ai resend <id>           # an expired grill, again
 npx grill-me-ai cancel <id>
 ```
 
-`send` prints one short link and a terminal QR code (`--qr light` for light terminals, `--qr off`).
+`send` prints one short link without a QR code. Agents show the formatted questions in chat,
+then append “Grill it on your phone” and the link. Explicit legacy `--qr dark|light` remains available
+for CLI callers that request it.
 
 ## Privacy
 

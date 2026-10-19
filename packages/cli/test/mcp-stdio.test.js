@@ -100,13 +100,14 @@ test("initialize → tools/list → grill_send → phone answers → grill_wait 
   assert.deepEqual(list.result.tools.map((x) => x.name), ["grill_send", "grill_wait", "grill_cancel"]);
 
   const sent = await mcp.request("tools/call", { name: "grill_send", arguments: { text: DEMO_TEXT } });
-  const { id, link, qr, count, expiresAt } = sent.result.structuredContent;
+  const { id, link, count, expiresAt } = sent.result.structuredContent;
   assert.match(id, /^[A-Za-z0-9_-]{16}$/);
   assert.match(link, new RegExp(`^${fake.url}/g/`));
-  assert.ok(qr.includes("█"));
+  assert.equal(Object.hasOwn(sent.result.structuredContent, "qr"), false);
   assert.equal(count, 4);
   assert.equal(typeof expiresAt, "number");
-  assert.ok(sent.result.content[0].text.includes("```"), "the QR is fenced in the text");
+  assert.ok(sent.result.content[0].text.includes(`Grill it on your phone\n${link}`));
+  assert.doesNotMatch(sent.result.content[0].text, /[▀▄█]|```/, "no QR or fenced payload");
 
   // the metrics user-agent carries the mapped MCP client name
   const creates = fake.requests().filter((x) => x.method === "POST" && x.path === "/api/g");

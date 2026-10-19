@@ -41,9 +41,15 @@ npx -y grill-me-ai send - <<'EOF'
 EOF
 ```
 
-Put **the link from its output on its own line as plain text** in your reply (so it's clickable
-wherever markdown renders), and **the QR inside a code block**. Keep the `id`: `cancel`, `resend`
-and `fetch` need it.
+Show all the formatted questions in your reply, then end with:
+
+```text
+Grill it on your phone
+<the returned link>
+```
+
+Use the real link as plain text, without a code block. Do not print a QR code. Keep the `id`
+for `cancel`, `resend` and `fetch`; it is not part of the user-facing footer.
 
 ## 3. Wait for the answers in the background
 

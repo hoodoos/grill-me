@@ -161,7 +161,7 @@ do not start the plugin's public npx server. If unavailable, stop and report it.
 
 ```text
 Use the installed Grill Me to send exactly the two disposable questions below. Show the
-returned link on its own line and the returned QR in a code block. Wait through this
+formatted questions followed by “Grill it on your phone” and the returned link on its own line. Wait through this
 client's correct transport: Claude Code uses CLI wait as a background command and resumes
 when it exits; a local MCP client uses grill_send then grill_wait, repeating on WAITING.
 Return the actual answer lines. Do not carry out any snack/place decision or other real
@@ -205,9 +205,9 @@ Do not ask for WebFetch in a client that does not provide it.
 
 | Path | Reviewer steps after the applicable installation gate/consent |
 | --- | --- |
-| CLI | Save the exact two-question payload as `questions.md`. Invoke the installed Node entry point with `send questions.md`, display its link and QR, then `wait <id>`. Check the two returned lines and `STATUS: ANSWERS`. Use `fetch <id>` for one check; `cancel <id>` for a discarded run; `resend <id>` only for an expired run. |
-| Claude Code plugin | Confirm the installed skill is available. In a private run, apply the prompt prefix above so all skill CLI commands use the exact installed Node entry point, overriding public `npx`. Send the fixture; show link and QR. Run CLI `wait <id>` **in the background**, end the turn, and verify Claude Code resumes with the actual answer lines. If answers arrive in chat instead, stop that background wait and run CLI `cancel <id>`. |
-| Codex plugin / Codex IDE / other local MCP | Confirm `grill_send`, `grill_wait` and `grill_cancel` are visible. Send the exact fixture as `text`, show link and QR, then call `grill_wait` with the returned `id`. `WAITING` is normal: repeat with the same `id` until `ANSWERS`. Verify the actual lines. Use `grill_cancel` for a discarded run or answers given in chat. |
+| CLI | Save the exact two-question payload as `questions.md`. Invoke the installed Node entry point with `send questions.md`, display its link without a QR, then `wait <id>`. Check the two returned lines and `STATUS: ANSWERS`. Use `fetch <id>` for one check; `cancel <id>` for a discarded run; `resend <id>` only for an expired run. |
+| Claude Code plugin | Confirm the installed skill is available. In a private run, apply the prompt prefix above so all skill CLI commands use the exact installed Node entry point, overriding public `npx`. Send the fixture; show the formatted questions and phone link, without a QR. Run CLI `wait <id>` **in the background**, end the turn, and verify Claude Code resumes with the actual answer lines. If answers arrive in chat instead, stop that background wait and run CLI `cancel <id>`. |
+| Codex plugin / Codex IDE / other local MCP | Confirm `grill_send`, `grill_wait` and `grill_cancel` are visible. Send the exact fixture as `text`, show the formatted questions and phone link, without a QR, then call `grill_wait` with the returned `id`. `WAITING` is normal: repeat with the same `id` until `ANSWERS`. Verify the actual lines. Use `grill_cancel` for a discarded run or answers given in chat. |
 | Claude Desktop `.mcpb` | Obtain the exact private bundle and verify its hash/version, or after release download the exact `v0.1.0` asset. Open it, inspect the Install dialog, install only after yes, and restart if the app requests it. Verify all three tools are visible, then run the same MCP two-question roundtrip. Record the GUI/tool evidence; GUI acceptance stays **PENDING** until actually observed. |
 
 For `EXPIRED`, offer a fresh send of the same questions. For `OFFLINE`, retain answers and

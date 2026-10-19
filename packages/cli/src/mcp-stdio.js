@@ -11,8 +11,9 @@ const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.
 const INSTRUCTIONS =
   "Grill Me turns questions into phone swipe cards. Use grill_send when the user explicitly asks to be grilled " +
   "(even one clarifying question), or when you have two or more questions. Without an explicit grill request, " +
-  "ask a single question in chat. Show the link as plain text and the QR in a code " +
-  "block, then call grill_wait with the id. If the user answers in chat instead, call grill_cancel.";
+  "ask a single question in chat. Show every question in full in the usual grill format, then end your reply " +
+  "with 'Grill it on your phone' and the returned link as plain text. Do not print a QR code. " +
+  "Then call grill_wait with the id. If the user answers in chat instead, call grill_cancel.";
 
 // GRILL_ME_WAIT_SECONDS is both the default and, when set, the cap: each client sets it to fit
 // its tool time limit (Desktop 180 < 240 s, Codex 840 < 900), so a larger `seconds` must not
@@ -65,9 +66,10 @@ function localTools(env) {
       }
       return {
         text:
-          `${result.link}\n\n\`\`\`\n${result.qr}\n\`\`\`\n\n` +
-          `Show the link as plain text and the QR in a code block, then call grill_wait with id "${result.id}".`,
-        structured: result,
+          `Show every question in full in the usual grill format, then end your reply with:\n\n` +
+          `Grill it on your phone\n${result.link}\n\n` +
+          `Then call grill_wait with id "${result.id}".`,
+        structured: { id: result.id, link: result.link, count: result.count, expiresAt: result.expiresAt },
       };
     },
 

@@ -81,18 +81,18 @@ test("send reads stdin and prints the exact block", async (t) => {
   assert.ok(await fs.stat(path.join(home, "pending", `${id}.json`)), "pending file written");
 });
 
-test("send prints the QR by default and JSON with --json", async (t) => {
+test("send prints a link without QR by default and JSON with --json", async (t) => {
   const { home, server } = await fixture(t);
   const plain = await run(["send", "-"], { input: DEMO_TEXT, home, server });
   assert.equal(plain.code, 0, plain.stderr);
-  assert.ok(plain.stdout.includes("▀") || plain.stdout.includes("▄") || plain.stdout.includes("█"), "QR in output");
+  assert.doesNotMatch(plain.stdout, /[▀▄█]/, "no QR in default output");
   assert.ok(sentId(plain.stdout));
 
   const json = await run(["send", "-", "--json"], { input: DEMO_TEXT, home, server });
   assert.equal(json.code, 0, json.stderr);
   const result = JSON.parse(json.stdout);
   assert.equal(result.count, 4);
-  assert.equal(typeof result.qr, "string");
+  assert.equal(result.qr, null);
   assert.match(result.link, /^http/);
   assert.match(result.id, /^[A-Za-z0-9_-]{16}$/);
   assert.ok(result.expiresAt);

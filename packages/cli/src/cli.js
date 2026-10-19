@@ -109,7 +109,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
         if (file && file !== "-") input = await fs.readFile(file, "utf8");
         else if (!file && stdin.isTTY) throw new UsageError("send needs a file, -, or piped stdin");
         else input = await readStdin(stdin);
-        const result = await send(input, { title: values.title, server: values.server, qr: values.qr ?? "dark" });
+        const result = await send(input, { title: values.title, server: values.server, qr: values.qr ?? "off" });
         if (values.json) out(JSON.stringify(result, null, 2));
         else printSend(out, result);
         return 0;
@@ -158,7 +158,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
           throw new UsageError("--qr must be dark, light or off");
         }
         const [id] = positionals;
-        const result = await resend(id, { server: values.server, qr: values.qr ?? "dark" });
+        const result = await resend(id, { server: values.server, qr: values.qr ?? "off" });
         if (values.json) out(JSON.stringify(result, null, 2));
         else printSend(out, result);
         return 0;

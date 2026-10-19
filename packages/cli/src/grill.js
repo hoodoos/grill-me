@@ -160,7 +160,7 @@ async function collect(pending, blob, { server, home, agent, scope }) {
   };
 }
 
-export async function send(input, { title, server, qr = "dark", home, agent } = {}) {
+export async function send(input, { title, server, qr = "off", home, agent } = {}) {
   const dir = stateHome(home);
   await prunePending(dir);
   const res = convert(input, { title });
@@ -232,7 +232,7 @@ export function check(id, options = {}) {
 
 // Re-upload the same grill under a new id and a new secret. The phone resumes its progress,
 // because that progress is keyed by the grill's content.
-export async function resend(id, { qr = "dark", server, home, agent } = {}) {
+export async function resend(id, { qr = "off", server, home, agent } = {}) {
   const dir = stateHome(home);
   await prunePending(dir);
   const pending = await loadPending(dir, id);

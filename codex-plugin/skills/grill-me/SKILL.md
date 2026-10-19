@@ -33,9 +33,16 @@ across rounds (Q11, Q12, …). The format, word for word:
 
 ## 2. Send the grill
 
-Call `grill_send` with exactly the questions (not your whole reply) as `text`. From its result,
-put **the link on its own line as plain text** in your reply (so it's clickable wherever markdown
-renders), and **the QR inside a code block**. Keep the `id`: `grill_wait` and `grill_cancel` need it.
+Call `grill_send` with exactly the questions (not your whole reply) as `text`. Show all the
+formatted questions in your reply, then end with:
+
+```text
+Grill it on your phone
+<the returned link>
+```
+
+Use the real link as plain text, without a code block. Do not print a QR code. Keep the `id`
+for `grill_wait` and `grill_cancel`; it is not part of the user-facing footer.
 
 ## 3. Wait for the answers
 

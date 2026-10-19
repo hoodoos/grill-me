@@ -85,8 +85,9 @@ const SEND_DESCRIPTION =
   "clarifying question, or for a batch of two or more questions. Without an explicit grill request, ask a " +
   "single question in chat. " +
   "Pass exactly one of grill (the structured format) or text (grill text: '❓ Q1 - <title>' lines, a body and " +
-  "choice bullets, a '➡️ <recommendation>' line, questions separated by ---). Show the returned link as plain " +
-  "text and the QR in a code block, then call grill_wait with the id to collect the answers.";
+  "choice bullets, a '➡️ <recommendation>' line, questions separated by ---). Show all questions in full in your " +
+  "reply, then end with 'Grill it on your phone' and the returned link as plain text. Do not print a QR code. " +
+  "Then call grill_wait with the id to collect the answers.";
 
 // grillToolDefs({ mode: "local" | "hosted", waitSeconds?: { default, max } }) → the three tool
 // definitions, without run. waitSeconds fills the real numbers into the local seconds description.

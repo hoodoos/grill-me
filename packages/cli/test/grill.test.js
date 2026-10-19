@@ -34,7 +34,7 @@ test("send → pending file → phone answers → wait returns ANSWERS and clean
   const r = await send(DEMO_TEXT, { server, home });
   assert.equal(r.count, 4);
   assert.match(r.link, new RegExp(`^${server}/g/[A-Za-z0-9_-]{16}#[A-Za-z0-9_-]{22}$`));
-  assert.ok(r.qr.length > 0);
+  assert.equal(r.qr, null);
 
   const pending = await readPending(home, r.id);
   assert.equal(pending.id, r.id);
