@@ -1,0 +1,52 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "grill-me-game",
+  "version": "0.2.0",
+  "description": "Turn an idea into a friendly swipe-card interview. Answer in chat or on your phone, one focused round at a time.",
+  "author": {
+    "name": "hoodoos",
+    "url": "https://github.com/hoodoos"
+  },
+  "homepage": "https://grill-me.ai/",
+  "repository": "https://github.com/hoodoos/grill-me",
+  "license": "MIT",
+  "keywords": [
+    "interview",
+    "decisions",
+    "planning",
+    "swipe-cards"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Grill-me Game",
+        "shortDescription": "Swipe your ideas into shape",
+        "longDescription": "Do you know what grilling is? It is how an agent helps you turn a rough idea into clear decisions, one good question at a time.\n\nGrill-me Game makes that conversation playable. Swipe right to agree with a recommended answer, or left to write your own. Answer inside a supported chat view or open the same private link on your phone. Your agent uses your answers to choose the next questions, keeping the same interview session throughout.\n\nUse it to sharpen a product idea, plan a project, untangle a design, or pressure-test a decision.\n\nBuilt around Matt Pocock's complete original grilling skill, distributed unchanged under MIT. Your agent owns the interview history. The service keeps only the current encrypted round and uncollected answers; acknowledgment clears those ciphertexts. In hosted mode, questions, answers and the link key are processed transiently on the server, and your AI provider also sees them. Keep your full session link private.\n\nInline cards and automatic continuation depend on your chat app. An open, message-capable card view can request a follow-up when answers arrive from the phone. Continuing after that view closes requires a supported, registered event subscription.",
+        "developerName": "hoodoos",
+        "category": "Productivity",
+        "capabilities": [
+          "Swipe to answer",
+          "Continue on your phone",
+          "Keep one interview across rounds"
+        ],
+        "websiteURL": "https://grill-me.ai/",
+        "supportURL": "https://github.com/hoodoos/grill-me/issues",
+        "privacyPolicyURL": "https://grill-me.ai/#privacy",
+        "defaultPrompt": [
+          "Grill me about my product idea and help me find the decisions that matter.",
+          "Help me pressure-test my project plan with swipe cards.",
+          "Grill me about a decision until we understand what to do next."
+        ],
+        "brandColor": "#3b5bdb",
+        "brandColorDark": "#a5b4fc",
+        "composerIcon": "./assets/logo.svg",
+        "logo": "./assets/logo.svg",
+        "screenshots": [
+          "./assets/store-demo.png",
+          "./assets/store-swipe.png",
+          "./assets/store-own-answer.png"
+        ]
+      }
+    }
+  }
+}

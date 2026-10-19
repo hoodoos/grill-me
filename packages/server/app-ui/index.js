@@ -15,6 +15,7 @@ function retire() {
 }
 function message(text) {
   retire(); $("cards").hidden = true; $("status").hidden = false; $("status").textContent = text;
+  compactLayout();
 }
 function retry(fn) { retryAction = fn; $("retry").hidden = !fn; }
 $("retry").onclick = () => { const fn = retryAction; retry(null); if (fn) void fn(); };
@@ -50,7 +51,7 @@ async function notify() {
   try {
     // Metadata only. The model already owns the private link; never include its key,
     // questions, answers or a replacement ACK in this user-origin follow-up.
-    const result = await app.sendMessage({ role: "user", content: [{ type: "text", text: `Grill Me answers available for session ${ids.id}, round ${saved.round}, submission ${saved.submissionId}: the server-confirmed winning submission, possibly from the phone or another view. Use the saved private interview link to grill_wait ONCE with seconds:1, read and retain the actual winning answers, then ACK its exact receipt and continue the Matt frontier on the SAME view. After publishing, end your turn for the next input. Finish only after shared-understanding confirmation. This notification is not an ACK or a claim that this view submitted the answers.` }] }, { timeout: 15_000 });
+    const result = await app.sendMessage({ role: "user", content: [{ type: "text", text: `Grill-me Game: answers ready for session ${ids.id}, round ${saved.round}, submission ${saved.submissionId}.` }] }, { timeout: 15_000 });
     if (result.isError) throw new Error("rejected");
     if (!alive || g !== generation || saved !== notice) return;
     saved.notified = true; retry(null);
@@ -99,9 +100,10 @@ async function accept(snapshot) {
     if (!alive || g !== generation) return;
     grill = decoded; $("status").hidden = true; $("cards").hidden = false;
     ui = mountGrill($("grill-root"), { grill, saved: draft,
-      onChange: snap => { if (alive && generation === g) draft = snap; },
+      onChange: snap => { if (alive && generation === g) { draft = snap; compactLayout(); } },
       onSend: answers => { if (!alive || generation !== g) throw new Error("Round moved on."); return send(answers); },
     });
+    compactLayout();
   } else if (snapshot.state === "answered") {
     if (intent && intent.round === round && intent.submissionId === snapshot.submissionId) {
       if (!confirmed) { try { await submitIntent(); } catch { retry(submitIntent); } }
@@ -130,17 +132,58 @@ async function poll() {
     }
   }
 }
-function dimensions(context = app.getHostContext()) {
-  const d = context?.containerDimensions;
-  const height = d?.height ?? d?.maxHeight;
-  document.documentElement.style.setProperty("--host-height", Number.isFinite(height) && height > 0 ? `${height}px` : "100dvh");
-  // maxHeight is permission to request a bounded size, not proof that the host has
-  // already allocated it. A sandbox may initially be150px tall.
-  if (Number.isFinite(d?.maxHeight) && d.maxHeight > 0) app.sendSizeChanged({ height: d.maxHeight });
-  $("expand").hidden = !context?.availableDisplayModes?.includes("fullscreen") || context?.displayMode === "fullscreen";
+const INLINE_HEIGHT = 480;
+let sizingContext, sizingMode = "inline", savedInlineHeight = INLINE_HEIGHT, lastSizeRequest;
+const positive = value => Number.isFinite(value) && value > 0;
+function compactLayout() {
+  const host = $("app-host"), style = getComputedStyle(host);
+  const small = !$("cards").hidden && host.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) < 350;
+  host.classList.toggle("compact", small); $("compact").hidden = !small;
+  if (!small) { $("compact-title").textContent = $("compact-copy").textContent = ""; return; }
+  const question = draft && draft.pos >= draft.order.length ? null : grill?.questions[draft?.order?.[draft.pos] ?? 0];
+  $("compact-title").textContent = `Round ${round} · ${question?.title ?? "Answers ready"}`;
+  $("compact-copy").textContent = !$("expand").hidden
+    ? "Open Full screen to answer. Your current draft is kept."
+    : "Use the same phone link in chat to answer. Your current draft is kept.";
+}
+function dimensions(update = app.getHostContext() ?? {}) {
+  const mode = update.displayMode ?? sizingMode, changedMode = mode !== sizingMode;
+  sizingContext = { ...(sizingContext ?? app.getHostContext()), ...update };
+  if (changedMode) {
+    // SDK context notifications merge partially. A mode-only transition must not
+    // reuse the previous mode's fixed dimensions, or suppress a repeated inline hint.
+    if (!Object.hasOwn(update, "containerDimensions")) delete sizingContext.containerDimensions;
+    lastSizeRequest = undefined;
+  }
+  sizingMode = mode;
+  const d = sizingContext.containerDimensions ?? {}, fixed = positive(d.height), ceiling = positive(d.maxHeight) ? d.maxHeight : undefined;
+  let height = fixed ? d.height : "100dvh";
+  if (fixed) {
+    if (mode === "inline") savedInlineHeight = Math.min(INLINE_HEIGHT, d.height);
+    lastSizeRequest = undefined; // a fixed host allocation is authoritative
+  } else if (mode === "inline") {
+    height = Math.min(changedMode || !Object.hasOwn(update, "containerDimensions") ? savedInlineHeight : INLINE_HEIGHT, ceiling ?? Infinity);
+    savedInlineHeight = height;
+    if (lastSizeRequest !== height) {
+      lastSizeRequest = height;
+      void Promise.resolve(app.sendSizeChanged({ height })).catch(() => {});
+    }
+  }
+  const style = document.documentElement.style;
+  style.setProperty("--host-height", typeof height === "number" ? `${height}px` : height);
+  style.setProperty("--host-max-height", ceiling === undefined ? "100dvh" : `${ceiling}px`);
+  for (const side of ["top", "right", "bottom", "left"]) {
+    const inset = sizingContext.safeAreaInsets?.[side];
+    style.setProperty(`--host-safe-${side}`, `${Number.isFinite(inset) ? Math.max(0, inset) : 0}px`);
+  }
+  $("expand").hidden = !sizingContext.availableDisplayModes?.includes("fullscreen") || mode === "fullscreen";
+  compactLayout();
 }
 $("expand").onclick = () => { void app.requestDisplayMode({ mode: "fullscreen" }).catch(() => {}); };
-app.onhostcontextchanged = context => dimensions({ ...app.getHostContext(), ...context });
+app.onhostcontextchanged = update => dimensions(update);
+// A fixed allocation notification can precede the iframe's actual viewport resize.
+// Re-measure only the compact fallback; do not send another sizing hint.
+window.addEventListener("resize", compactLayout);
 app.ontoolresult = result => {
   // Ignore input/partial notifications entirely. A valid COMPLETED render result is
   // the sole capability handoff. Re-delivery must not reset this view's current draft.
@@ -156,4 +199,4 @@ app.ontoolresult = result => {
   void poll();
 };
 app.onteardown = async () => { end(); return {}; };
-app.connect().then(() => dimensions()).catch(() => message("This host could not connect the interactive view. Use the same phone link in chat."));
+app.connect().then(() => dimensions(sizingContext ? {} : app.getHostContext())).catch(() => message("This host could not connect the interactive view. Use the same phone link in chat."));
