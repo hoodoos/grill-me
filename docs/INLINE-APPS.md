@@ -51,6 +51,12 @@ does not block the state poll, and a late response cannot suppress a newer round
 After rendering the first inline view, the agent ends its turn instead of blocking in
 `grill_wait`. A submitted-answers UI follow-up gets one `grill_wait({seconds:1})` read;
 after read/retain/ACK and the next publish it yields again, keeping the same view.
+For an actually rendered inline view, the questions/recommendations stay in the cards;
+the only chat copy is `Grill it on your phone: <same link>`. Do not duplicate the frontier
+above or below the cards. Phone-only presentation keeps the full frontier in chat, in
+Matt's original format, followed by that same link. The original skill body is unchanged;
+this separate transport rule selects where its round is presented. Local CLI/stdio
+presentation is unchanged.
 Unexpected `WAITING` does not authorize an inline polling loop, ACK or replacement round.
 Phone polling is a separate active-turn path. Automatic phone wake requires a host that
 supports it and a successfully registered subscription; advertising events does not
