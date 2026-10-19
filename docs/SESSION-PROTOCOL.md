@@ -78,10 +78,13 @@ Legacy `send()` and ordinary CLI `send` stay one-shot. Add library `sendRound(in
 Session records are separate from legacy current pending state and identified by protocol v2.
 
 - `sendRound(input,{id?,round?,expectedRevision?,...})`: without id createsround1; with id requires
-  explicit next round and expectedRevision matching the local idle state. Persist one exact encrypted
+  explicit next round. Resolve any preceding ack recovery, read the current idle revision and always
+  send it as expectedRevision; an optional caller-supplied expectedRevision must match that value.
+  (The answered revision returned before async ack is not falsely reported as an acknowledged revision.)
+  Persist one exact encrypted
   publication intent (id/key/operation/blob/round) atomically BEFORE request; retry/recovery reuses it.
   Never generate duplicate rounds after a lost reply or overwrite another pending publication/cache.
-- CLI `send --session` creates; `send --id ID --round N --revision V` publishes on that explicit session.
+- CLI `send --session` creates; `send --id ID --round N [--revision V]` publishes on that explicit session.
   `wait/fetch/cancel ID` work for both. Add `finish ID` for idle sessions. No automatic QR.
 - MCP `grill_send` adds optional `session:boolean` (defaultfalse for compatibility), `id`, `round`,
   `expectedRevision`. New wrappers explicitly use `session:true`, save returned id/identity and reuse it.
@@ -90,7 +93,8 @@ Session records are separate from legacy current pending state and identified by
 - Session send/wait results include `{id,round,revision,state}` as applicable, stable link/count/expiry
   on send. ANSWERS adds round/revision/submissionId to existing status/answerlines. Idle status is
   `IDLE` with current identity. Next publication uses the post-ack idle revision, not answeredrevision.
-  To obtain it, sendRound reads current authenticated local/session state after ensuring recovery ack.
+  To obtain it, sendRound reads current authenticated local/session state after ensuring recovery ack;
+  the model may omit expectedRevision, but cannot omit the explicit reused id/next round.
 - Keep full formatted frontier rounds visible in chat. Show stable phone link initially; later rounds
   update the open phone automatically. No new id/key/link, no QR, no automatic attach across agents.
 - Preserve complete unchanged upstream skill body in both references and MCP-only instructions.
