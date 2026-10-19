@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import { convert, validateGrill, answerLines, newSecret, isId } from "../../core/src/index.js";
 import { parseSessionLink, makeSessionLink, sealRound, openRound, openRoundAnswers, deriveSessionKeys, validateRound } from "../../core/src/session.js";
 import { GRILL_SCHEMA } from "../../core/src/format.js";
+import { MODERN, modernRequest, modernResult } from "./mcp-modern.js";
+import { EVENT_NAME } from "./answer-events.js";
 
 const ORIGIN = "https://grill-me.ai";
 const ORIGINS = new Set([ORIGIN, "https://claude.ai", "https://chatgpt.com"]);
@@ -15,12 +17,17 @@ export const HOSTED_INSTRUCTIONS =
   "Grill Me interviews: call grill_start once, retain its private link; grill_send publishes each explicit round on that same link. Show every question in full, then 'Grill it on your phone' and the link. grill_wait returns answers without clearing them. Only AFTER receiving and retaining the answer lines, call grill_ack with the exact receipt; then publish the next round or grill_finish. WAITING: repeat wait. Retry uncertain writes with the same arguments. Never ACK before receiving answers. " +
   "An explicit grilling request uses these tools even for one clarification; otherwise a lone unsolicited question can stay in chat. Follow the complete unchanged Matt Pocock workflow below. Never attach unrelated interviews to a previous link. Keep the link private; it contains the encryption capability. " +
   "App mode handles plaintext and keys transiently on Grill Me's server; only ciphertext is persisted. The model/provider also sees the questions, answers and private link. Do not print QR codes. Finish only after shared-understanding confirmation; cancel when abandoning the interview. No answer history is kept here.\n\n" + UPSTREAM;
+const CONTINUATION = "Keep the user on the SAME phone page for the whole interview, including final shared-understanding confirmation as a phone round. Make the phone link visible BEFORE blocking waits. With native MCP Events, subscribe to grill.answers_ready for this private link so the SAME subscribed host chat wakes automatically, then wait/read/retain/ACK and publish the next frontier. A webhook2xx is NOT answer delivery or ACK. Without wake support, immediately call grill_wait and repeat WAITING while the host keeps its turn active; this cannot wake an ended turn. Never ask the user to type answered/done or ask permission merely to continue. Grok automations are fresh runs, NOT the previous chat: save/read/update the design tree and answers in a host-owned durable checkpoint before ACK; missing toolable persistent context means automatic continuation is unavailable and answers MUST NOT be ACKed. ";
 
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
 const fail = code => { throw Object.assign(new Error(code), { safeCode: code }); };
 const field = (description, type = "string") => ({ type, description });
 const linkField = field("The exact private https://grill-me.ai/g/...?...#... link returned by grill_start. Never substitute another host.");
 const annotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const CONTEXT_RECEIPT = { type: "object", additionalProperties: false, properties: {
+  reference: field("Exact durable host-owned context reference registered with Grok automation; never the design-tree contents."),
+  revision: field("Updated host checkpoint version after retaining this round's answers and design tree; unique for each new ACK."),
+}, required: ["reference", "revision"] };
 // The shared format supports transport-only callers without advice. Hosted interviews follow
 // Matt's workflow: every frontier question must offer a recommendation that "yes" accepts.
 const HOSTED_GRILL_SCHEMA = structuredClone(GRILL_SCHEMA);
@@ -41,11 +48,19 @@ const TOOLS = [
     link: linkField, receipt: { type: "object", additionalProperties: false, properties: {
       round: field("Exact received round.", "integer"), expectedRevision: field("Exact ANSWERS revision, not a later snapshot.", "integer"), submissionId: field("Exact answer submission identifier."),
     }, required: ["round", "expectedRevision", "submissionId"] },
+    contextReceipt: CONTEXT_RECEIPT,
   }, ["link", "receipt"], { destructiveHint: true }),
   def("grill_finish", "Explicitly finish this interview only AFTER confirming shared understanding. Requires an idle session at its exact current revision; pending questions/uncollected answers are refused. A known finished receipt makes retry safe.", {
     link: linkField, expectedRevision: field("Exact current idle revision.", "integer"),
   }, ["link", "expectedRevision"], { destructiveHint: true }),
   def("grill_cancel", "Abort this interview when the user answered in chat or abandoned it. May discard pending questions/uncollected answers. Do not use to collect answers.", { link: linkField }, ["link"], { destructiveHint: true }),
+  def("grill_subscribe", "Grok automation adapter ONLY, not old-chat resume. Before registration save this private link, full Matt workflow and design tree in durable host-owned automation context that each fresh run can read AND update. Supply account-provided webhook and secret. No verification POST/paid test run is made. Receiver configuration does NOT prove context continuity; if host context tools are unavailable do NOT register or ACK. Each ACK requires contextReceipt for an updated checkpoint. ChatGPT uses native events/subscribe instead.", {
+    link: linkField, url: field("Grok account-provided public HTTPS443 automation webhook; kept encrypted at rest."), secret: field("Account-provided whsec_ Standard Webhooks secret; never display/log."),
+    contextReference: field("Reference to the established durable host checkpoint containing the link, workflow and design tree; no contents."), ttlMs: field("Requested finite lifetime, capped1hour.", "integer"),
+  }, ["link", "url", "secret", "contextReference"], { openWorldHint: true }),
+  def("grill_unsubscribe", "Stop this interview's configured Grok webhook without collecting or clearing answers. Idempotent. Keep the private link for wait/collection or cancel separately.", {
+    link: linkField, url: field("The exact previously configured callback URL."),
+  }, ["link", "url"]),
 ];
 const safeMessages = {
   INPUT: "Invalid tool arguments. Use the advertised schema; retain the same private link and explicit round.",
@@ -54,6 +69,7 @@ const safeMessages = {
   CONFLICT: "Conflicting or stale operation. Do not replace current questions or uncollected answers. Retry only the exact saved request or inspect the intended round.",
   LIMIT: "Hosted capacity limit reached. Retry later with the same saved arguments; do not create a new interview.",
   UNAVAILABLE: "Operation unconfirmed or temporarily unavailable. Retry the exact saved arguments. Answers are not cleared without explicit ACK.",
+  CONTEXT: "Before ACK, retain the answers and updated design tree in the registered durable HOST checkpoint, then pass its exact reference and new revision in contextReceipt. If the host cannot read/update durable context, do not ACK; Grok fresh-run continuation is unavailable.",
 };
 const response = (id, result) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
@@ -102,7 +118,7 @@ function readMessage(req) {
   });
 }
 
-export function createHostedMcp({ relay, stat, now = Date.now, version, limits = {} }) {
+export function createHostedMcp({ relay, events, stat, now = Date.now, version, limits = {} }) {
   const maxCreates = limits.creates ?? 600, maxWaits = limits.waits ?? 200, maxConversation = limits.conversation ?? 30;
   const creates = new Map(), conversations = new Map(), controllers = new Set();
   let waits = 0;
@@ -134,10 +150,16 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
       const bytes = crypto.randomBytes(12), issued = Math.floor(now() / 1000);
       bytes.writeUInt32BE(issued, 0);
       return out("PREPARED", { link: makeSessionLink(bytes.toString("base64url"), newSecret(), ORIGIN), round: 1, expectedRevision: 0,
-        publishBefore: issued * 1000 + PREPARE_MS, grillingInstructions: HOSTED_INSTRUCTIONS,
+        publishBefore: issued * 1000 + PREPARE_MS, grillingInstructions: CONTINUATION + HOSTED_INSTRUCTIONS,
         message: "Capability allocated only; no questions published. Retain this link and publish round1/revision0 within10minutes. Published sessions retain their normal refreshed1hour expiry." });
     }
     const ids = capability(args.link), keys = await deriveSessionKeys(ids.secret);
+    if (name === "grill_subscribe" || name === "grill_unsubscribe") {
+      const scope = { sessionId: ids.id, authHash: keys.writeHash, preparedUntil: Buffer.from(ids.id, "base64url").readUInt32BE(0) * 1000 + PREPARE_MS };
+      if (name === "grill_unsubscribe") { events.unsubscribe({ ...scope, delivery: { url: args.url } }); return out("UNSUBSCRIBED"); }
+      const result = await events.subscribe({ ...scope, provider: "grok", delivery: { mode: "webhook", url: args.url, secret: args.secret }, contextReference: args.contextReference, ttlMs: args.ttlMs, signal: ctx.signal });
+      return out("SUBSCRIBED", result);
+    }
     const invoke = (operation, body, round, wait = 0) => relay({ operation, id: ids.id, keys, body, round, wait, signal: ctx.signal, agent: ctx.agent });
     const snapshot = await invoke("snapshot");
     if (snapshot.status === 404 && name !== "grill_send") return ended(snapshot);
@@ -193,10 +215,12 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
           message: "Retain these answers, then call grill_ack with this exact receipt. Nothing has been cleared yet." });
       }
     }
-    const body = name === "grill_ack" ? { expectedRevision: args.receipt.expectedRevision, submissionId: args.receipt.submissionId } : { expectedRevision: args.expectedRevision };
+    const body = name === "grill_ack" ? { expectedRevision: args.receipt.expectedRevision, submissionId: args.receipt.submissionId, ...(args.contextReceipt ? { contextReceipt: args.contextReceipt } : {}) } : { expectedRevision: args.expectedRevision };
     const operation = name === "grill_ack" ? "ack" : name === "grill_finish" ? "finish" : "cancel";
     const r = await invoke(operation, body, args.receipt?.round);
-    if (r.status === 404) return ended(r); check(r);
+    if (r.status === 404) return ended(r);
+    if (r.status === 409 && /checkpoint/.test(r.body?.error ?? "")) fail("CONTEXT");
+    check(r);
     if (name === "grill_ack") {
       const current = await invoke("snapshot");
       return out("ACKNOWLEDGED", { round: args.receipt.round, ...(current.status === 200 ? { currentRound: current.body.round, revision: current.body.revision, state: current.body.state } : {}),
@@ -207,6 +231,8 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
 
   async function handle(req, res, url) {
     const receivedAt = performance.now();
+    let modern = false;
+    const response = (id, result) => ({ jsonrpc: "2.0", id, result: modern ? modernResult(result, version) : result });
     const headers = { "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; frame-ancestors 'none'" };
     const reply = (status, value) => { if (status >= 400) { req.resume(); res.setHeader("connection", "close"); }
@@ -214,7 +240,7 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
     if (url.search) return reply(400, rpcError(null, -32600, "MCP URL must not contain query parameters"));
     if (req.headers.origin !== undefined && !ORIGINS.has(req.headers.origin)) { stat("hosted_rejected", "origin"); return reply(403); }
     if (req.method !== "POST") { res.setHeader("allow", "POST"); return reply(405); }
-    if (req.headers["mcp-session-id"] !== undefined || (req.headers["mcp-protocol-version"] !== undefined && !VERSIONS.includes(req.headers["mcp-protocol-version"]))) return reply(400);
+    if (req.headers["mcp-session-id"] !== undefined) return reply(400);
     const accept = String(req.headers.accept ?? "").toLowerCase().split(",").filter(s => {
       const q = /;\s*q\s*=\s*([\d.]+)/.exec(s); return !q || (Number(q[1]) > 0 && Number(q[1]) <= 1);
     }).map(s => s.trim().split(";")[0].trim());
@@ -228,19 +254,50 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
     if (!object(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string" ||
       ("id" in message && !(typeof message.id === "string" && message.id.length <= 128 || Number.isSafeInteger(message.id))) ||
       (message.params !== undefined && !object(message.params))) return reply(400, rpcError(null, -32600, "Invalid JSON-RPC request"));
+    const protocol = modernRequest(req, message, [MODERN, ...VERSIONS]); modern = protocol.modern;
+    if (protocol.error) return reply(400, { jsonrpc: "2.0", id: message.id ?? null, error: protocol.error });
+    if (!modern && req.headers["mcp-protocol-version"] !== undefined && !VERSIONS.includes(req.headers["mcp-protocol-version"])) return reply(400);
     if (!("id" in message)) return ["notifications/initialized", "notifications/cancelled"].includes(message.method) ? reply(202) : reply(400);
     const { id, params = {}, method } = message;
+    if (modern && method === "server/discover") return reply(200, response(id, { supportedVersions: [MODERN, ...VERSIONS], capabilities: { tools: {}, events: {} },
+      instructions: CONTINUATION + HOSTED_INSTRUCTIONS, cacheScope: "public", ttlMs: 300_000 }));
+    if (modern && method === "events/list") return reply(200, response(id, { events: [{ name: EVENT_NAME,
+      description: "Current phone round's winning answer is ready. Wake this SAME subscribed interview chat, read/retain answers using its saved private link, ACK exact receipt, recompute frontier and publish next round. Payload is metadata only, not answer delivery.",
+      delivery: ["webhook"], inputSchema: { type: "object", properties: { link: linkField }, required: ["link"], additionalProperties: false },
+      payloadSchema: { type: "object", properties: { sessionId: field("Session ID"), round: field("Current round", "integer"), revision: field("Answered revision", "integer"), submissionId: field("Winning submission ID") },
+        required: ["sessionId", "round", "revision", "submissionId"], additionalProperties: false },
+    }] }));
+    if (modern && ["events/subscribe", "events/unsubscribe"].includes(method)) {
+      const controller = new AbortController(); controllers.add(controller);
+      const timer = setTimeout(() => controller.abort(), Math.max(0, receivedAt + 15_000 - performance.now())); timer.unref();
+      const disconnect = () => controller.abort(); res.once("close", disconnect);
+      try {
+        if (Object.keys(params).some(k => !["name", "arguments", "delivery", "ttlMs", "cursor", "_meta"].includes(k)) || params.name !== EVENT_NAME || !object(params.arguments) ||
+          Object.keys(params.arguments).join() !== "link" || params.cursor !== undefined && params.cursor !== null || !object(params.delivery) ||
+          Object.keys(params.delivery).some(k => !["mode", "url", "secret"].includes(k)) || params.delivery.mode !== "webhook") throw new Error("invalid");
+        const ids = capability(params.arguments.link), keys = await deriveSessionKeys(ids.secret);
+        const args = { sessionId: ids.id, authHash: keys.writeHash, preparedUntil: Buffer.from(ids.id, "base64url").readUInt32BE(0) * 1000 + PREPARE_MS,
+          delivery: params.delivery, ttlMs: params.ttlMs, signal: controller.signal };
+        const result = method === "events/subscribe" ? await events.subscribe(args) : events.unsubscribe(args);
+        if (!res.destroyed) reply(200, response(id, result));
+      } catch (e) {
+        const reason = ["timeout", "challenge_failed", "blocked_address", "network", "redirect", "response_limit", "capacity", "conflict"].includes(e.reason) ? e.reason : "invalid_subscription";
+        if (!res.destroyed) reply(200, { jsonrpc: "2.0", id, error: { code: -32015, message: "Callback subscription unavailable", data: { reason } } });
+      } finally { clearTimeout(timer); res.off("close", disconnect); controller.abort(); controllers.delete(controller); }
+      return;
+    }
+    if (modern && method === "initialize") return reply(404, rpcError(id, -32601, "Method not found"));
     if (method === "initialize") {
       if (typeof params.protocolVersion !== "string" || !params.protocolVersion || params.protocolVersion.length > 64 || !object(params.capabilities) ||
         !object(params.clientInfo) || typeof params.clientInfo.name !== "string" || !params.clientInfo.name || params.clientInfo.name.length > 200 ||
         typeof params.clientInfo.version !== "string" || !params.clientInfo.version || params.clientInfo.version.length > 100)
         return reply(200, rpcError(id, -32602, "Invalid initialization parameters"));
       return reply(200, response(id, { protocolVersion: VERSIONS.includes(params.protocolVersion) ? params.protocolVersion : VERSIONS[0],
-        capabilities: { tools: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS }));
+        capabilities: { tools: { listChanged: false } }, serverInfo: { name: "grill-me-hosted", version }, instructions: HOSTED_INSTRUCTIONS + "\n\n" + CONTINUATION }));
     }
     if (method === "ping") return reply(200, response(id, {}));
-    if (method === "tools/list") return reply(200, response(id, { tools: TOOLS }));
-    if (method !== "tools/call") return reply(200, rpcError(id, -32601, "Method not found"));
+    if (method === "tools/list") return reply(200, response(id, { tools: TOOLS, ...(modern ? { cacheScope: "public", ttlMs: 300_000 } : {}) }));
+    if (method !== "tools/call") return reply(modern ? 404 : 200, rpcError(id, -32601, "Method not found"));
     const tool = TOOLS.find(t => t.name === params.name);
     if (!tool) return reply(200, rpcError(id, -32602, "Unknown tool"));
     let args = params.arguments === undefined ? {} : params.arguments;

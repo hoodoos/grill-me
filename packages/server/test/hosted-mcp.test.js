@@ -42,15 +42,15 @@ async function fixture(t, options = {}) {
   return { base, rpc, call, start, send, answer, inspect, logs, dir, stats };
 }
 
-test("hosted instructions, six independent schemas and strict sanitized HTTP/JSON-RPC", async t => {
+test("hosted instructions, independent legacy and continuation schemas and strict sanitized HTTP/JSON-RPC", async t => {
   const f = await fixture(t), sentinel = "DO_NOT_ECHO_PRIVATE_SENTINEL";
   const init = await (await f.rpc("initialize", { protocolVersion: "2025-11-25", clientInfo: { name: "test", version: "1" }, capabilities: {} })).json();
   assert.equal(init.result.protocolVersion, "2025-11-25"); assert.equal(init.result.serverInfo.version, "0.2.0");
-  assert.equal(init.result.instructions, HOSTED_INSTRUCTIONS);
+  assert.ok(init.result.instructions.startsWith(HOSTED_INSTRUCTIONS));
   for (const word of ["grill_start", "grill_wait", "grill_ack", "receiving"]) assert.ok(init.result.instructions.slice(0, 512).includes(word));
   assert.ok(init.result.instructions.includes(await fs.readFile(new URL("../../core/src/grilling.md", import.meta.url), "utf8")));
   const tools = (await (await f.rpc("tools/list")).json()).result.tools;
-  assert.deepEqual(tools.map(t => t.name), ["grill_start", "grill_send", "grill_wait", "grill_ack", "grill_finish", "grill_cancel"]);
+  assert.deepEqual(tools.map(t => t.name), ["grill_start", "grill_send", "grill_wait", "grill_ack", "grill_finish", "grill_cancel", "grill_subscribe", "grill_unsubscribe"]);
   assert.equal(tools.find(t => t.name === "grill_wait").annotations.readOnlyHint, true);
   assert.equal(tools.find(t => t.name === "grill_start").annotations.readOnlyHint, true);
   const skill = await fs.readFile(new URL("../../core/src/grilling.md", import.meta.url), "utf8");
