@@ -281,48 +281,44 @@ agent:
 
 ## Hosted mode (`grill-me.ai/mcp`)
 
-claude.ai on the web, the Claude mobile apps and ChatGPT can only use remote MCP servers. So the same Node
-server also serves a remote MCP endpoint at `https://grill-me.ai/mcp`, with the same tools.
+M4b uses stateless authless Streamable HTTP, preserving the shipped0.2 same-link,
+current-round-only interview protocol. The precise tool/schema, retry, privacy, quota and
+transport contract is [docs/HOSTED-MCP.md](docs/HOSTED-MCP.md).
 
-- **Transport:** streamable HTTP, stateless. `POST /mcp` takes JSON-RPC. `Mcp-Session-Id` is neither required
-  nor issued. `GET /mcp` returns `405`. A `tools/call` that waits answers with an SSE stream opened at once,
-  with keep-alive comments, so proxies and clients don't cut an idle response.
-  - An `Origin` header, if present, must be on a short allowlist (`https://claude.ai`, `https://chatgpt.com`,
-    `https://grill-me.ai`); otherwise the server answers `403`. `/stats` counts rejected origins per day (scheme
-    and host only, at most 20 distinct a day), so a real client that gets blocked is noticed.
-- **No auth (authless).** Both claude.ai and ChatGPT allow that for custom connectors.
-- **Key with the model:**
-  - `grill_send`: the server makes the id and secret, encrypts in memory, and stores only the ciphertext and
-    `writeHash`, exactly as in local mode. It returns `{ id, link, count, expiresAt }`. Then it forgets the secret: it isn't
-    written to disk or logs, and no reference is kept after the call.
-  - `grill_wait({ link } | { id, secret }, seconds?)`: the model passes the link back. The server derives the
-    keys, long-polls inside the call, decrypts the answers in memory and returns the answer lines. Then it
-    `DELETE`s the grill and forgets the key.
-  - The disk only ever holds encrypted data, never a key. Readable text exists only in memory during a call.
-  - `grill_cancel({ link } | { id, secret })`.
-- **Time limits:** ChatGPT cuts a tool call at about 60 s, and claude.ai at 240 s. So hosted `grill_wait`
-  defaults to 45 s (or 180 s when `clientInfo.name` is a Claude client), is capped at 200 s, and returns
-  `WAITING` for the model to call again.
-- **No logging of tool arguments or results anywhere**, error paths included. Errors returned to the model never
-  echo its input.
-- **Limits:** calls arrive from the platforms' shared IPs, so per-IP limits don't fit here. Hosted mode has its
-  own global caps: 600 grills an hour and 200 concurrent waits. Where the client sends a conversation id (ChatGPT's
-  `_meta["openai/session"]`), there is also a cap of 30 grills an hour per conversation, kept in memory only, so
-  one noisy conversation can't use up everyone's quota. Clients without one fall under the global caps only.
-  `/stats` shows the global headroom and how often each cap is hit. Grills and their retention work exactly as in
-  local mode.
-- **Site wording:** "Local mode: we can't read your grills. App mode: your grill passes through our server only to
-  be encrypted, and is never stored readable."
-- **Where it works** (October 2026):
-  - claude.ai: every plan (Free allows one custom connector), and its connectors also work in the Claude mobile
-    apps.
-  - ChatGPT: custom MCP servers are web only, and only Business, Enterprise and Edu allow write tools like
-    `grill_send`.
-  - The README and the site lead with claude.ai, the Claude apps, Claude Code and Codex. ChatGPT is listed as
-    "ChatGPT Business, Enterprise and Edu, on the web". It never claims ChatGPT mobile, Plus or Free.
-- **Later, not now:** in-chat swipe cards through the MCP Apps extension, with a `ui://` resource referenced from
-  the tool's `_meta`. Tool results already carry `structuredContent`, so that can be added without changing the
-  tools.
+- Six server-only tools: `grill_start` prepares a private capability without publishing;
+  `grill_send` publishes each explicit round using that same link and exact expected revision;
+  `grill_wait` returns answers without clearing them; `grill_ack` confirms actual model receipt
+  with the unchanged original round/revision/submission receipt; `grill_finish` requires idle;
+  `grill_cancel` explicitly aborts. Network response completion is never treated as model receipt.
+- Randomized AES-GCM/v2 session+round+slot AAD stays unchanged. Keyed canonical-input publish
+  identities allow exact lost-reply/concurrent retry without replacing pending content.
+  The private key/plaintext exists transiently in a call; no readable persistence, local
+  pending files or argument/result/error logging. Only current ciphertext/opaque relay
+  retry identity and existing minimal10minute terminal receipts persist; no interview history.
+- POST `/mcp` validates Origin, JSON-RPC/Accept/content/body and uses sanitized errors.
+  GET/DELETE405, no Mcp-Session-Id. Waits open SSE immediately with keepalives, default45s
+  and max50s across both clients. Response closure aborts/reclaims capacity.
+- Hosted quotas are independent of shared platform IPs:600new sessions/hour,200concurrent
+  waits,30new sessions/hour/conversation where bounded client metadata identifies one.
+  Conversation digests/counters are bounded and memory-only; private stats show headroom
+  and aggregate rejection counts. Existing shared per-session waiter caps still apply.
+- Exact nginx `/mcp` proxy requires request and response buffering OFF, HTTP1.1,32KB body
+  buffer and `client_body_in_file_only off` to avoid plaintext request spooling. Access/error
+  logging is disabled only here; no query capabilities. This is an intentional site-local
+  nginx configuration/deploy-tree change, not a neighbour configuration change.
+- Local mode encrypts on the user's device and never sends the key. App mode handles the
+  key and readable questions/answers transiently on our server; the model/provider also sees
+  the conversation/private link. Only encrypted content is persisted. State this distinction.
+- Current official documentation (checked2026-10-19): Claude remote custom connectors run
+  through Claude's cloud across web/Desktop/mobile. ChatGPT custom MCP setup is documented
+  for web via Plugins > Add custom MCP server > No authentication; account/workspace policies
+  apply. The old Business-only/web-only certainty is retired: do not infer current plan
+  access or mobile/desktop support. Actual account/client behavior needs actual observation.
+  See the primary-source links in the hosted protocol document.
+- Complete pinned Matt workflow is included unchanged in initialize instructions; the first
+  512characters explain the hosted capability/send/wait/explicit-ACK cycle independently.
+  No npm publication is needed for hosted custom connections. Public-directory submission
+  and in-chat MCP Apps cards remain separate future work.
 
 ## Install
 

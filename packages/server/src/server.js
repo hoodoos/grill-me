@@ -1,5 +1,6 @@
 // The Grill Me server: encrypted grills in SQLite, a long poll for answers, and the static
-// page. It stores only ciphertext; the key never reaches it (it lives in the link's #fragment).
+// page. Relay storage is ciphertext-only. Local-mode keys never reach it; hosted app tools
+// receive keys/plaintext transiently within a call, with no readable persistence or logging.
 //
 // Metrics: daily counters and bucket counters only — never content, IPs, ids, link parts or
 // user agents verbatim, and never one row per grill.
@@ -10,6 +11,9 @@ import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
+import { createHostedMcp } from "./hosted-mcp.js";
 import { isId, b64urlDecode, b64urlEncode, hashWriteToken, LIMITS } from "../../core/src/index.js";
 import { wantsMarkdown, loadInstall } from "./install.js";
 
@@ -76,6 +80,7 @@ export function createServer(options = {}) {
     now = Date.now,
     ttlMs = 3_600_000,
     sweepMs = 60_000,
+    hostedLimits = {},
     maxWaitS = 50,
     log = () => {},
     createsPerHour = 60,
@@ -245,6 +250,7 @@ export function createServer(options = {}) {
 
   // ---------- in-memory limits and live counters (never written to disk or logs) ----------
   const creates = new Map(); // ip -> timestamps within the rolling hour
+  const HOSTED = Symbol("trusted in-process hosted request"); // never an HTTP header
   const waiters = new Map(); // grill id -> Set of { res, timer, ip }
   const sessionWaiters = new Map(); // session id -> Set of { res, timer, ip, done, respond }
   const waitersByIp = new Map(); // ip -> count
@@ -327,7 +333,7 @@ export function createServer(options = {}) {
   const holdSessionWaiter = (req, res, id, waitS, respond) => {
     const ip = clientIp(req);
     const total = (waiters.get(id)?.size || 0) + (sessionWaiters.get(id)?.size || 0);
-    if (total >= waitersPerGrill || (waitersByIp.get(ip) || 0) >= waitersPerIp)
+    if (total >= waitersPerGrill || (!req[HOSTED] && (waitersByIp.get(ip) || 0) >= waitersPerIp))
       return sendJson(res, 429, { error: "too many waiting requests" });
     const w = { res, ip, done: false, respond };
     // On timeout, re-evaluate instead of answering blind: an expired session is 404 gone
@@ -527,7 +533,7 @@ export function createServer(options = {}) {
         maxBytes: maxBytes ?? null,
         pct: maxBytes ? Math.round((mem.rss / maxBytes) * 1000) / 10 : null,
       },
-      live: { waiters: waitersTotal, waitersMaxPerGrill: waitersMax, minutes: minutesOut },
+      live: { waiters: waitersTotal, waitersMaxPerGrill: waitersMax, minutes: minutesOut, hosted: hostedMcp.stats() },
       days,
     };
   };
@@ -681,7 +687,7 @@ export function createServer(options = {}) {
 
   const postSession = async (req, res) => {
     const ip = clientIp(req);
-    if (!createAllowed(ip)) { req.resume(); return sendJson(res, 429, { error: "too many grills" }); }
+    if (!req[HOSTED] && !createAllowed(ip)) { req.resume(); return sendJson(res, 429, { error: "too many grills" }); }
     const body = await readJson(req);
     if (body.error) return badRequest(res, body.error);
     const { id, round, operationId, ct, iv, writeHash, qb } = body.value ?? {};
@@ -891,6 +897,44 @@ export function createServer(options = {}) {
     sendEmpty(res, 204);
   };
 
+  // Reuse the exact public relay handlers/CAS and shared per-id waiters without a loopback
+  // network/SSRF path or platform-IP quotas. This adapter buffers ciphertext only. Its
+  // trusted Symbol is unreachable from HTTP and it never logs request bodies or capabilities.
+  const hostedRelay = ({ operation, id, keys, body, round, wait, signal, agent }) => new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error("aborted"));
+    const req = new PassThrough(); req[HOSTED] = true;
+    req.headers = { authorization: `Bearer ${keys.writeToken}`, "user-agent": `grill-me-ai/${PKG_VERSION} (${agent})` };
+    req.socket = { remoteAddress: "hosted" };
+    const res = new EventEmitter(); let status, done = false;
+    res.setHeader = () => {};
+    res.writeHead = code => { status = code; };
+    const cleanup = () => { signal.removeEventListener("abort", abort); req.destroy(); res.emit("close"); };
+    res.end = raw => {
+      if (done) return; done = true; cleanup();
+      try { resolve({ status, body: raw ? JSON.parse(raw) : null }); } catch { reject(new Error("relay response")); }
+    };
+    const abort = () => { if (done) return; done = true; cleanup(); reject(new Error("aborted")); };
+    signal.addEventListener("abort", abort, { once: true });
+    const run = async () => {
+      if (operation === "snapshot" || operation === "answers") {
+        const row = liveSession(id);
+        if (!row) return sessionGone(res, id);
+        if (!tokenEq(row.write_hash, keys.writeHash)) return sendEmpty(res, 403);
+        if (operation === "snapshot") return getSession(req, res, id, new URL("http://internal/?wait=0"));
+        return getRoundAnswers(req, res, id, round, new URL(`http://internal/?wait=${wait}`));
+      }
+      if (operation === "create") return postSession(req, res);
+      if (operation === "publish") return postRound(req, res, id);
+      if (operation === "ack") return postAck(req, res, id, round);
+      if (operation === "finish") return postFinish(req, res, id);
+      if (operation === "cancel") return deleteSession(req, res, id);
+      throw new Error("unknown internal operation");
+    };
+    run().catch(() => { if (!done) { done = true; cleanup(); reject(new Error("relay unavailable")); } });
+    if (!req.destroyed) req.end(body ? JSON.stringify(body) : undefined);
+  });
+  const hostedMcp = createHostedMcp({ relay: hostedRelay, stat, now, version: PKG_VERSION, limits: hostedLimits });
+
   const server = http.createServer(async (req, res) => {
     const t0 = now();
     res.on("close", () => {
@@ -901,6 +945,7 @@ export function createServer(options = {}) {
     try {
       const url = new URL(req.url, "http://x");
       const p = url.pathname;
+      if (p === "/mcp") return await hostedMcp.handle(req, res, url);
       if (p === "/healthz") {
         let ok = !shuttingDown && !unhealthy;
         if (ok) try { dbh.prepare("SELECT 1").get(); } catch { ok = false; }
@@ -979,6 +1024,7 @@ export function createServer(options = {}) {
   const close = () =>
     new Promise((resolve, reject) => {
       shuttingDown = true;
+      hostedMcp.close();
       clearInterval(sweeper);
       for (const id of [...waiters.keys()]) wake(id, 204); // shutdown answers every waiter 204
       for (const set of sessionWaiters.values()) {

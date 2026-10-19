@@ -74,6 +74,12 @@ function render(d) {
     card("Memory", `${(d.memory.rss / 1048576).toFixed(1)} MB RSS, ${(d.memory.heapUsed / 1048576).toFixed(1)} MB heap — ${memPct} of cap`),
     card("DB size", `${(d.dbBytes / 1024).toFixed(0)} KB`),
   );
+  if (d.live.hosted) {
+    const h = d.live.hosted;
+    live.append(card("Hosted sessions/hour", `${h.creates}/${h.createLimit} used · ${h.createHeadroom} available`),
+      card("Hosted waits", `${h.waits}/${h.waitLimit} active · ${h.waitHeadroom} available`),
+      card("Hosted capacity rejections", fmt(total(dayMap, "hosted_rejected"))));
+  }
   const mins = d.live.minutes;
   const maxReq = Math.max(1, ...mins.map((m) => m.requests));
   const minEl = $("minutes");
