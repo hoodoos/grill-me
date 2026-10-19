@@ -9,8 +9,9 @@ import { writeOutput } from "./output.js";
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
 const INSTRUCTIONS =
-  "Grill Me turns your questions for the user into swipe cards on their phone. Use grill_send when you have " +
-  "2 or more questions (one question: just ask in chat). Show the link as plain text and the QR in a code " +
+  "Grill Me turns questions into phone swipe cards. Use grill_send when the user explicitly asks to be grilled " +
+  "(even one clarifying question), or when you have two or more questions. Without an explicit grill request, " +
+  "ask a single question in chat. Show the link as plain text and the QR in a code " +
   "block, then call grill_wait with the id. If the user answers in chat instead, call grill_cancel.";
 
 // GRILL_ME_WAIT_SECONDS is both the default and, when set, the cap: each client sets it to fit

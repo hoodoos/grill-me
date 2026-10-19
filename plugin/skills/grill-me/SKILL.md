@@ -1,13 +1,16 @@
 ---
 name: grill-me
-description: Turn a batch of questions for the user into swipe cards on their phone. Use whenever you are about to ask the user two or more questions — decisions, choices, clarifications, approvals. You print one short link and a QR code; the user answers by swiping; the answers arrive back in this session. End-to-end encrypted, nothing to install for the user. For a single question, just ask it in the terminal.
+description: Send questions as encrypted swipe cards on the user's phone. Use when the user explicitly asks to be grilled or to use Grill Me, or when you need to ask two or more questions. An explicit grill request also applies to one question; otherwise ask a single question in the conversation.
 ---
 
 # Grill Me — questions to phone, answers to session
 
-When you have **two or more questions** for the user, send them as a grill: the user answers by
-swiping on their phone, and the answers come back as your command's output. One question only:
-just ask it in the terminal, no grill.
+When the user explicitly asks to be grilled or to use Grill Me, send a grill with the CLI below.
+If the topic needs clarification, put that clarification in the grill rather than asking it in
+the terminal first. A single question is enough for an explicit request; do not invent extra questions.
+
+Otherwise, use a grill when you have **two or more questions** for the user. Ask an ordinary single
+question in the terminal. The user answers on their phone, and the answers come back as the command's output.
 
 ## 1. Write the questions in the grill text format
 

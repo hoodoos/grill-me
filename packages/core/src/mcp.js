@@ -81,7 +81,9 @@ export function createMcpHandler({ name, version, instructions, tools }) {
 const TRUTHFUL = { readOnlyHint: false, openWorldHint: true, destructiveHint: false, idempotentHint: false };
 
 const SEND_DESCRIPTION =
-  "Ask the user two or more questions as swipe cards on their phone (one question: just ask it in chat). " +
+  "Send questions as swipe cards on the user's phone. Use for an explicit request to be grilled, even a single " +
+  "clarifying question, or for a batch of two or more questions. Without an explicit grill request, ask a " +
+  "single question in chat. " +
   "Pass exactly one of grill (the structured format) or text (grill text: '❓ Q1 - <title>' lines, a body and " +
   "choice bullets, a '➡️ <recommendation>' line, questions separated by ---). Show the returned link as plain " +
   "text and the QR in a code block, then call grill_wait with the id to collect the answers.";
