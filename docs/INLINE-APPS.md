@@ -41,7 +41,15 @@ round/submission metadata, no key/questions/answers. Rejection (including resolv
 can produce at-least-once follow-ups; per-view intent deduplication and relay CAS protect
 rounds, not a claim of globally exactly-once model processing. The agent still waits,
 reads/retains, explicitly ACKs the original receipt, and publishes the next frontier.
-Choose UI follow-up for in-chat and native events for phone to avoid gratuitous wakes.
+After rendering the first inline view, the agent ends its turn instead of blocking in
+`grill_wait`. A submitted-answers UI follow-up gets one `grill_wait({seconds:1})` read;
+after read/retain/ACK and the next publish it yields again, keeping the same view.
+Unexpected `WAITING` does not authorize an inline polling loop, ACK or replacement round.
+Phone polling is a separate active-turn path. Automatic phone wake requires a host that
+supports it and a successfully registered subscription; advertising events does not
+establish one. Neither a queued UI message nor an absent subscription proves that a
+provider will resume the model. This workflow correction does not establish actual
+provider scheduling, iframe lifetime or model adherence.
 
 Actual `ui/initialize` capabilities determine bridge/message/display-mode support.
 Both fixed container height and maxHeight are honored; the unchanged560px card remains
