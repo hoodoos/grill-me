@@ -25,7 +25,18 @@ SQLite encrypted remnants are not a promise of secure physical disk erasure.
 
 An authenticated transition refreshes expiry to one hour; reads/polls do not extend retention.
 Expiry deletes the session and wakes polls. Finish requires idle; cancel may explicitly abort any state.
-Deletion returns404 thereafter: the phone says "Session ended or expired", not invented finish success.
+Deletion still returns404. A successful finish, explicit cancel, or observed live expiry atomically
+records a short-lived receipt with only `id`, `reason` (`finished`, `cancelled`, `expired`) and
+`expires_at`, alongside deletion of the current session. Receipts last ten minutes, are pruned by
+the sweeper and on insertion, and are capped at10000 rows. They contain no questions, answers,
+ciphertexts, key/hash, operation/version data or round history. A same-id replacement atomically
+clears the prior receipt. Authenticated mutation conditions and exact winner semantics are unchanged.
+Known expiry is recorded even before the sweeper runs. A404 JSON body includes `{error:"gone",reason}`
+while a receipt is live; unknown/aged-out IDs remain `{error:"gone"}` without an invented reason.
+The phone displays "All done—your agent has finished this grill.", "This grill was cancelled.",
+or "This session expired." only for the matching known reason; unknown remains generic.
+End receipts need no key, so key/plaintext purge is preserved while reload/reconnect and other open
+tabs can still recover the authoritative message. No offline remote-erasure promise is made.
 Aggregated daily metrics are allowed, never per-session history. Existing rate/wait/IP caps apply jointly
 to legacy and session traffic, including phone update polls and agent answer polls.
 
@@ -52,6 +63,12 @@ All blobs use existing canonical base64url/size validation. Authentication error
 All state writes recheck authenticated hash/live expiry/current state synchronously after async auth;
 conditional SQL changes and wake/count occur only for the winning transition. Shared poll limits include
 both channels. Retrying the exact operation is idempotent, not another winner or duplicate metric.
+
+After an authoritative idle/ACK snapshot, the standalone phone shows a decorative shuffling-card
+stack and "Your agent is thinking. Keep this page open—your next questions will appear here."
+A secondary "Back to Grill Me" link points to `/`; it never navigates automatically. Reduced-motion
+uses a static stack. Sent-before-pickup, errors, current questions and terminal screens do not show
+the thinking animation. The next frontier replaces it automatically; reconnect first rechecks state.
 
 | Request | Result/conditions |
 | --- | --- |

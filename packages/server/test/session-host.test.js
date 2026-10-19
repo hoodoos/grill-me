@@ -1,6 +1,7 @@
 // Session-host invariants (protocol v2 phone side). These run anywhere `node --test` runs; the
 // behavioral browser proofs live in session-host-browser.test.js.
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -28,7 +29,6 @@ const pinned = (p) => execFileSync("git", ["-C", ROOT, "show", `${PINNED_BASE}:$
 // browsers never import it here.
 const LEGACY_FROZEN = [
   "packages/server/public/app.js",
-  "packages/server/public/style.css",
   "packages/ui/src/grill.js",
   "packages/ui/src/state.js",
   "packages/ui/src/text.js",
@@ -46,13 +46,15 @@ test("legacy modules the session page shares stay byte-identical to the pinned 0
   }
 });
 
-test("grill.html changes only the script entry; every other byte is the 0.1 page", { skip: !pinnedAvailable && "pinned base object unavailable" }, () => {
+test("grill.html changes only cache URLs for the entry and standalone host style", { skip: !pinnedAvailable && "pinned base object unavailable" }, () => {
   const base = pinned("packages/server/public/grill.html").split("\n");
   const now = read("packages/server/public/grill.html").split("\n");
   assert.equal(base.length, now.length, "grill.html must not gain or lose lines");
   const diffs = base.map((l, i) => [l, now[i]]).filter(([a, b]) => a !== b);
-  assert.deepEqual(diffs, [['<script type="module" src="/app.js"></script>', '<script type="module" src="/entry-020.js"></script>']],
-    "only the script entry may differ");
+  const styleVersion = createHash("sha256").update(read("packages/server/public/style.css")).digest("hex").slice(0, 12);
+  assert.deepEqual(diffs, [[base.find(l => l.includes('/style.css?')), `<link rel="stylesheet" href="/style.css?v=${styleVersion}">`],
+    ['<script type="module" src="/app.js"></script>', '<script type="module" src="/entry-020.js?v=terminal-1"></script>']],
+    "only changed standalone assets gain cache versions; the shared CSS URL stays untouched");
 });
 
 test("the session page and its module graph are served with correct types", async () => {
@@ -66,11 +68,11 @@ test("the session page and its module graph are served with correct types", asyn
     const page = await fetch(`${origin}/g/${id}?session=2`);
     assert.equal(page.status, 200);
     const html = await page.text();
-    assert.match(html, /src="\/entry-020\.js"/, "the grill page enters through entry-020");
+    assert.match(html, /src="\/entry-020\.js\?v=terminal-1"/, "the grill page enters through the versioned entry");
     const csp = page.headers.get("content-security-policy");
     assert.match(csp, /default-src 'self'/, "strict CSP intact");
 
-    for (const [p, name] of [["/entry-020.js", "entry"], ["/session-app.js", "session app"], ["/core/session.js", "session crypto"]]) {
+    for (const [p, name] of [["/entry-020.js?v=terminal-1", "entry"], ["/session-app.js?v=terminal-1", "session app"], ["/core/session.js", "session crypto"]]) {
       const r = await fetch(origin + p, { cache: "no-store" });
       assert.equal(r.status, 200, `${name} served`);
       assert.match(r.headers.get("content-type"), /text\/javascript/, `${name} served as a JS module`);

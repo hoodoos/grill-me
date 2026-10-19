@@ -23,6 +23,8 @@ const PKG_VERSION = JSON.parse(
 ).version || "0.0.0";
 
 const BODY_CAP = 32768; // request bodies over 32 KB are refused without being read
+const TERMINAL_MS = 10 * 60_000;
+const MAX_TERMINALS = 10_000;
 const SECURITY_HEADERS = {
   "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "referrer-policy": "no-referrer",
@@ -103,6 +105,11 @@ export function createServer(options = {}) {
     ct TEXT, iv TEXT, ans_ct TEXT, ans_iv TEXT, write_hash TEXT NOT NULL,
     op_id TEXT, op_digest TEXT, op_rev INTEGER, sub_id TEXT, sub_digest TEXT, sub_rev INTEGER,
     created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)`);
+  // Short-lived end receipts only: no question/answer/auth/operation data or round history.
+  dbh.exec(`CREATE TABLE IF NOT EXISTS session_terminals(
+    id TEXT PRIMARY KEY, reason TEXT NOT NULL CHECK(reason IN ('finished','cancelled','expired')),
+    expires_at INTEGER NOT NULL)`);
+  dbh.exec("CREATE INDEX IF NOT EXISTS session_terminals_expiry ON session_terminals(expires_at)");
   dbh.exec(`CREATE TABLE IF NOT EXISTS stats(
     day TEXT NOT NULL, name TEXT NOT NULL, bucket TEXT NOT NULL DEFAULT '', count INTEGER NOT NULL,
     PRIMARY KEY (day, name, bucket))`);
@@ -132,7 +139,55 @@ export function createServer(options = {}) {
     WHERE id = ? AND state = 'answered' AND revision = ? AND revision < 2147483647 AND round = ? AND sub_id = ? AND expires_at > ? AND write_hash = ?`);
   const qSessionFinish = dbh.prepare("DELETE FROM sessions WHERE id = ? AND state = 'idle' AND revision = ? AND expires_at > ? AND write_hash = ?");
   const qSessionDelete = dbh.prepare("DELETE FROM sessions WHERE id = ?");
+  const qSessionExpire = dbh.prepare("DELETE FROM sessions WHERE id = ? AND expires_at <= ?");
   const qSessionExpired = dbh.prepare("SELECT id, state FROM sessions WHERE expires_at <= ?");
+  const qTerminalGet = dbh.prepare("SELECT reason FROM session_terminals WHERE id = ? AND expires_at > ?");
+  const qTerminalInsert = dbh.prepare("INSERT INTO session_terminals(id, reason, expires_at) VALUES (?, ?, ?)");
+  const qTerminalDelete = dbh.prepare("DELETE FROM session_terminals WHERE id = ?");
+  const qTerminalPrune = dbh.prepare("DELETE FROM session_terminals WHERE expires_at <= ?");
+  const qTerminalCap = dbh.prepare(`DELETE FROM session_terminals WHERE id IN
+    (SELECT id FROM session_terminals ORDER BY expires_at DESC, rowid DESC LIMIT -1 OFFSET ${MAX_TERMINALS})`);
+
+  // The deletion and receipt commit together or neither happens. Notify/count only after commit.
+  const endSession = (id, reason, remove) => {
+    dbh.exec("BEGIN IMMEDIATE");
+    try {
+      const changed = remove().changes;
+      if (changed) {
+        qTerminalPrune.run(now());
+        qTerminalInsert.run(id, reason, now() + TERMINAL_MS);
+        qTerminalCap.run();
+      }
+      dbh.exec("COMMIT");
+      return changed;
+    } catch (err) {
+      dbh.exec("ROLLBACK");
+      throw err;
+    }
+  };
+  // Preserve existing same-id replacement semantics, without leaving a prior end receipt
+  // attached to a newly created grill/session. Failure restores both pre-existing records.
+  const createWithoutOldReceipt = (id, insert) => {
+    dbh.exec("BEGIN IMMEDIATE");
+    try {
+      insert();
+      qTerminalDelete.run(id);
+      dbh.exec("COMMIT");
+    } catch (err) {
+      dbh.exec("ROLLBACK");
+      throw err;
+    }
+  };
+  const expireSession = (row) => {
+    if (endSession(row.id, "expired", () => qSessionExpire.run(row.id, now()))) {
+      stat("session_expired", row.state === "pending" ? "unanswered" : row.state);
+      wakeSessions(row.id);
+    }
+  };
+  const sessionGone = (res, id) => {
+    const terminal = qTerminalGet.get(id, now());
+    return sendJson(res, 404, { error: "gone", ...(terminal ? { reason: terminal.reason } : {}) });
+  };
 
   const day = () => new Date(now()).toISOString().slice(0, 10); // UTC YYYY-MM-DD
   const stat = (name, bucket = "") => qStat.run(day(), name, bucket);
@@ -155,7 +210,8 @@ export function createServer(options = {}) {
 
   const liveSession = (id) => {
     const row = qSessionGet.get(id);
-    return row && row.expires_at > now() ? row : null; // a row past expires_at is already a 404
+    if (row && row.expires_at <= now()) { expireSession(row); return null; }
+    return row ?? null; // lazy expiry records the reason even before the sweeper runs
   };
 
   // The current round only: ciphertext while pending/answered, none in idle, and never any
@@ -295,11 +351,9 @@ export function createServer(options = {}) {
       }
     }
     for (const { id, state } of qSessionExpired.all(now())) {
-      if (qSessionDelete.run(id).changes) {
-        stat("session_expired", state === "pending" ? "unanswered" : state);
-        wakeSessions(id);
-      }
+      expireSession({ id, state });
     }
+    qTerminalPrune.run(now());
     const cutoff = new Date(now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
     qPruneStats.run(cutoff);
   };
@@ -522,7 +576,7 @@ export function createServer(options = {}) {
     if (qSessionGet.get(id)) return sendJson(res, 409, { error: "id taken" }); // the namespaces never overlap
     const t = now();
     const expiresAt = t + ttlMs;
-    try { qInsert.run(id, ct, iv, writeHash, t, expiresAt); }
+    try { createWithoutOldReceipt(id, () => qInsert.run(id, ct, iv, writeHash, t, expiresAt)); }
     catch { return sendJson(res, 409, { error: "id taken" }); }
     statCreate(req, ctLen, qb);
     sendJson(res, 201, { id, expiresAt });
@@ -620,7 +674,7 @@ export function createServer(options = {}) {
   // authenticated write_hash (no delete+recreate or replacement inside the auth window).
   const sessionRevalidate = (res, row0) => {
     const row = liveSession(row0.id);
-    if (!row) { sendEmpty(res, 404); return null; }
+    if (!row) { sessionGone(res, row0.id); return null; }
     if (!tokenEq(row.write_hash, row0.write_hash)) { sendJson(res, 403, { error: "wrong write token" }); return null; }
     return row;
   };
@@ -638,18 +692,17 @@ export function createServer(options = {}) {
     if (decLen(writeHash) !== 32) return badRequest(res, "writeHash: must decode to 32 bytes");
     const ctLen = decLen(ct);
     if (ctLen < 17 || ctLen > LIMITS.grillBytes) return badRequest(res, `ct: must decode to 17..${LIMITS.grillBytes} bytes`);
-    if (qGet.get(id)) return sendJson(res, 409, { error: "id taken" }); // the namespaces never overlap
+    if (qGet.get(id)) return sendJson(res, 409, { error: "id taken" });
     const digest = blobDigest(ct, iv);
     const t = now();
     try {
-      qSessionInsert.run(id, ct, iv, writeHash, operationId, digest, t, t + ttlMs);
+      createWithoutOldReceipt(id, () => qSessionInsert.run(id, ct, iv, writeHash, operationId, digest, t, t + ttlMs));
     } catch {
       // The id is taken by a session: an exact retry of the current operation is a 200
       // snapshot (even after the state advanced); anything else conflicts. A row past its
       // expiry is already ended.
-      const row = qSessionGet.get(id);
-      if (!row) return sendJson(res, 409, { error: "id taken" });
-      if (!(row.expires_at > t)) return sendEmpty(res, 404);
+      const row = liveSession(id);
+      if (!row) return sessionGone(res, id);
       if (row.round === 1 && row.op_id === operationId && row.op_digest === digest && row.write_hash === writeHash)
         return sendJson(res, 200, sessionSnapshot(row));
       return sendJson(res, 409, { error: "id taken" });
@@ -661,7 +714,7 @@ export function createServer(options = {}) {
   const getSession = (req, res, id, url) => {
     if (!isId(id)) return sendEmpty(res, 404);
     const row = liveSession(id);
-    if (!row) return sendEmpty(res, 404);
+    if (!row) return sessionGone(res, id);
     const rawAfter = url.searchParams.get("after");
     const after = rawAfter === null ? null : Number(rawAfter);
     if (after !== null && (!Number.isInteger(after) || after < 0 || after > 2147483647))
@@ -671,7 +724,7 @@ export function createServer(options = {}) {
     if (!waitS) return sendEmpty(res, 204);
     holdSessionWaiter(req, res, id, waitS, () => {
       const cur = liveSession(id);
-      if (!cur) return sendJson(res, 404, { error: "gone" });
+      if (!cur) return sessionGone(res, id);
       if (cur.revision !== after) return sendJson(res, 200, sessionSnapshot(cur));
       return sendEmpty(res, 204);
     });
@@ -680,7 +733,7 @@ export function createServer(options = {}) {
   const postRound = async (req, res, id) => {
     if (!isId(id)) return sendEmpty(res, 404);
     const row0 = liveSession(id);
-    if (!row0) return sendEmpty(res, 404);
+    if (!row0) return sessionGone(res, id);
     const body = await readJson(req);
     if (body.error) return badRequest(res, body.error);
     const { round, expectedRevision, operationId, ct, iv, qb } = body.value ?? {};
@@ -703,7 +756,7 @@ export function createServer(options = {}) {
     // Loser: only an exact retry of the current operation returns a 200 snapshot — no
     // mutation, no extra metric. A different request with the same operationId conflicts.
     const cur = liveSession(id);
-    if (!cur) return sendEmpty(res, 404);
+    if (!cur) return sessionGone(res, id);
     if (cur.op_id === operationId && cur.op_digest === digest && cur.round === round && cur.op_rev === expectedRevision)
       return sendJson(res, 200, sessionSnapshot(cur));
     return sendJson(res, 409, { error: "conflicting operation" });
@@ -714,7 +767,7 @@ export function createServer(options = {}) {
     const round = parseRound(roundRaw);
     if (round === null) return badRequest(res, "round: must be an integer 1..2147483647");
     const row0 = liveSession(id);
-    if (!row0) return sendEmpty(res, 404);
+    if (!row0) return sessionGone(res, id);
     const body = await readJson(req);
     if (body.error) return badRequest(res, body.error);
     const { expectedRevision, submissionId, ct, iv } = body.value ?? {};
@@ -737,7 +790,7 @@ export function createServer(options = {}) {
     // Loser: an identical saved submission/blob retries 200 without mutation; a conflicting,
     // different or stale submission, or another round, is 409.
     const cur = liveSession(id);
-    if (!cur) return sendEmpty(res, 404);
+    if (!cur) return sessionGone(res, id);
     if ((cur.state === "answered" || cur.state === "idle") && cur.round === round &&
         cur.sub_id === submissionId && cur.sub_digest === digest && cur.sub_rev === expectedRevision)
       return sendJson(res, 200, { v: 2, id, round: cur.round, revision: cur.revision, state: cur.state, expiresAt: cur.expires_at, operationId: cur.op_id, submissionId: cur.sub_id });
@@ -749,7 +802,7 @@ export function createServer(options = {}) {
     const round = parseRound(roundRaw);
     if (round === null) return badRequest(res, "round: must be an integer 1..2147483647");
     const row = liveSession(id);
-    if (!row) return sendEmpty(res, 404);
+    if (!row) return sessionGone(res, id);
     if (row.round !== round) return sendJson(res, 409, { error: "different round" });
     if (row.state === "answered")
       return sendJson(res, 200, { round: row.round, revision: row.revision, submissionId: row.sub_id, ct: row.ans_ct, iv: row.ans_iv });
@@ -757,7 +810,7 @@ export function createServer(options = {}) {
     if (!waitS) return sendEmpty(res, 204);
     holdSessionWaiter(req, res, id, waitS, () => {
       const cur = liveSession(id);
-      if (!cur) return sendJson(res, 404, { error: "gone" });
+      if (!cur) return sessionGone(res, id);
       if (cur.round !== round) return sendJson(res, 409, { error: "different round" });
       if (cur.state === "answered")
         return sendJson(res, 200, { round: cur.round, revision: cur.revision, submissionId: cur.sub_id, ct: cur.ans_ct, iv: cur.ans_iv });
@@ -770,7 +823,7 @@ export function createServer(options = {}) {
     const round = parseRound(roundRaw);
     if (round === null) return badRequest(res, "round: must be an integer 1..2147483647");
     const row0 = liveSession(id);
-    if (!row0) return sendEmpty(res, 404);
+    if (!row0) return sessionGone(res, id);
     const body = await readJson(req);
     if (body.error) return badRequest(res, body.error);
     const { expectedRevision, submissionId } = body.value ?? {};
@@ -789,7 +842,7 @@ export function createServer(options = {}) {
         return sendEmpty(res, 204);
       }
       const cur = liveSession(id);
-      if (!cur) return sendEmpty(res, 404);
+      if (!cur) return sessionGone(res, id);
       if (cur.state === "idle" && cur.sub_id === submissionId && cur.sub_rev + 1 === expectedRevision) return sendEmpty(res, 204); // racing duplicate ack
       return sendJson(res, 409, { error: "conflicting ack" });
     }
@@ -806,7 +859,7 @@ export function createServer(options = {}) {
   const postFinish = async (req, res, id) => {
     if (!isId(id)) return sendEmpty(res, 404);
     const row0 = liveSession(id);
-    if (!row0) return sendEmpty(res, 404);
+    if (!row0) return sessionGone(res, id);
     const body = await readJson(req);
     if (body.error) return badRequest(res, body.error);
     const { expectedRevision } = body.value ?? {};
@@ -815,24 +868,24 @@ export function createServer(options = {}) {
     const row = sessionRevalidate(res, row0);
     if (!row) return;
     const t = now();
-    if (qSessionFinish.run(id, expectedRevision, t, row.write_hash).changes) {
+    if (endSession(id, "finished", () => qSessionFinish.run(id, expectedRevision, t, row.write_hash))) {
       stat("session_finished");
       wakeSessions(id);
       return sendEmpty(res, 204);
     }
-    const cur = qSessionGet.get(id);
-    if (!cur || cur.expires_at <= t) return sendEmpty(res, 404);
+    const cur = liveSession(id);
+    if (!cur) return sessionGone(res, id);
     return sendJson(res, 409, { error: "finish requires an idle session at the current revision" });
   };
 
   const deleteSession = async (req, res, id) => {
     if (!isId(id)) return sendEmpty(res, 404);
     const row0 = liveSession(id);
-    if (!row0) return sendEmpty(res, 404);
+    if (!row0) return sessionGone(res, id);
     if (!(await sessionAuth(req, res, row0))) return;
     const row = sessionRevalidate(res, row0);
     if (!row) return;
-    if (!qSessionDelete.run(id).changes) return sendEmpty(res, 404);
+    if (!endSession(id, "cancelled", () => qSessionDelete.run(id))) return sessionGone(res, id);
     stat("session_cancelled");
     wakeSessions(id);
     sendEmpty(res, 204);
