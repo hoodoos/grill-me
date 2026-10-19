@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';import os from 'node:os';import path from 'nod
 import http from 'node:http';import cp from 'node:child_process';import assert from 'node:assert/strict';
 import { readPending } from '../../cli/src/pending.js';
 import { deriveSessionKeys, sealRoundAnswers } from '../../core/src/session.js';
-import { newId } from '../../core/src/crypto.js';
+import { newId, newSecret } from '../../core/src/crypto.js';
 test('actual touch, same-link rounds, current draft and warm 0.1 browser cache', {skip: !process.env.GRILL_ME_BROWSER_TEST, timeout:60000}, async(t)=>{
 const {chromium}=await import(process.env.GRILL_ME_PLAYWRIGHT_MODULE || 'playwright-core');
 const repo=fileURLToPath(new URL('../../../',import.meta.url)),pin='d1fb2110565426ca450f57ea215cf92e7cd60b92';
@@ -36,9 +36,26 @@ const context=await browser.newContext({viewport:{width:390,height:844},hasTouch
 const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(String(e)));
 const grill={v:1,questions:[{n:1,title:'Disposable round',body:'Same questions in both rounds.',recommend:{why:'Test'}}]};
 const swipe=async(dx)=>{const b=await page.locator('.gm-card').boundingBox(),x=b.x+b.width/2,y=b.y+100;const c=await context.newCDPSession(page);await c.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});for(let i=1;i<=6;i++)await c.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+dx*i/6,y}]});await c.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await c.detach();};
+await page.addInitScript(() => {
+ if (new URLSearchParams(location.search).get('session') !== '2' || sessionStorage.getItem('boot-race-used')) return;
+ sessionStorage.setItem('boot-race-used','1');
+ const derive = crypto.subtle.deriveKey.bind(crypto.subtle); let first = true;
+ crypto.subtle.deriveKey = async (...args) => {
+   const key = await derive(...args);
+   if(first){first=false;globalThis.bootKeyReady=true;await new Promise(r=>{globalThis.releaseBootKey=r})}
+   return key;
+ };
+});
 const legacy=await send(grill,opts);await page.goto(legacy.link);await page.locator('.gm-card').waitFor();await cancel(legacy.id,opts);
  phase=2;
- const one=await sendRound(grill,opts);await page.goto(one.link);await page.locator('.gm-card').waitFor();
+ const one=await sendRound(grill,opts);await page.goto(one.link,{waitUntil:'commit'});
+ await page.waitForFunction(()=>globalThis.bootKeyReady===true);
+ await page.evaluate(id=>{
+   const key=`gm:s2:cur:${id}`,value=JSON.stringify({ts:Date.now(),round:1,revision:1});
+   localStorage.setItem(key,value);window.dispatchEvent(new StorageEvent('storage',{key,newValue:value}));
+   globalThis.releaseBootKey();
+ },one.id);
+ await page.locator('.gm-card').waitFor();
  assert.equal(new URL(page.url()).search,'?session=2');assert.equal(new URL(page.url()).hash,'');
  await swipe(160);await page.locator('.gm-send').waitFor();await page.locator('.gm-send').click();await page.locator('#screen-done:not([hidden])').waitFor();
  assert.equal(await page.evaluate(()=>Object.entries(localStorage).some(([k,v])=>k.startsWith('gm:s2:')&&v.includes('Same questions in both rounds.'))),false);
@@ -149,6 +166,11 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  assert.equal(await page.locator('.gm-send').count(),0);
  assert.equal(await page.locator('.gm-card').isVisible(),true);
  await cancel(late.id,opts);await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
+ const wrong=await sendRound(grill,opts);
+ await page.goto(wrong.link.split('#')[0]+'#'+newSecret());
+ await page.locator('#message-text').filter({hasText:"key can't open these questions"}).waitFor();
+ assert.equal(await page.locator('.gm-card').count(),0);
+ await cancel(wrong.id,opts);await page.locator('#message-text').filter({hasText:'Session ended or expired.'}).waitFor();
  assert.deepEqual(errors,[]);
  assert.equal(requests.some(r=>r.phase===2&&['/app.js','/core/index.js','/core/crypto.js'].includes(r.path)),false,'unchanged legacy modules were actually reused from the warm cache');
  console.log(JSON.stringify({result:'PASS',warmSameOriginCache:true,cacheCleared:false,networkRoutesUsed:false,rounds:2,stableLink:true,actualTouch:['right-agree','left-own'],reloadDraft:true,short350:bounds,finishPurge:true,offlineApiReload:true,immutableSubmission:true,losingDeviceCopy:true,lateAsyncAndTabGuards:true,pageerrors:errors,requests},null,2));

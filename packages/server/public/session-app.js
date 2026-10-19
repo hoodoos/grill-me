@@ -206,7 +206,10 @@ async function mountRoundFromRelay(snap) {
   try {
     grill = await openRound({ ct: snap.ct, iv: snap.iv }, { id, secret, round });
   } catch {
-    return; // undecryptable relay data: the next snapshot supersedes it
+    if (alive && gen === g && revision === rev && currentRound(round)) {
+      message("This link's key can't open these questions. Open the full link from your agent, or reload to try again.");
+    }
+    return;
   }
   if (!alive || gen !== g || revision !== rev) return; // superseded while decrypting
   const local = loadRound(round);
@@ -463,7 +466,7 @@ async function pollLoop() {
 // ---------- boot ----------
 window.addEventListener("storage", (event) => {
   if (alive && event.key === secKey(id) && event.newValue === null) return ended();
-  if (!alive || event.key !== curKey(id)) return;
+  if (!alive || !writeToken || event.key !== curKey(id)) return;
   const seen = readJson(curKey(id));
   if (seen?.revision > revision) {
     gen++;
@@ -491,14 +494,17 @@ if (params.get("session") !== "2" || !/^[A-Za-z0-9_-]{16}$/.test(id)) {
   if (!secret) {
     message("This link is missing its key. Open the full link from your agent.");
   } else {
-    const g0 = gen;
+    const keySecret = secret;
     try {
-      ({ writeToken } = await deriveSessionKeys(secret));
+      const keys = await deriveSessionKeys(keySecret);
+      if (alive && secret === keySecret) writeToken = keys.writeToken;
     } catch {
-      message("This link's key doesn't work. Open the full link from your agent.");
-      secret = null;
+      if (alive && secret === keySecret) {
+        message("This link's key doesn't work. Open the full link from your agent.");
+        secret = null;
+      }
     }
-    if (secret && alive && gen === g0) {
+    if (secret && alive && writeToken) {
       void syncOnce();
       void pollLoop();
     }
