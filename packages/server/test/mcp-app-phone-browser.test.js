@@ -84,7 +84,8 @@ test("official AppBridge forwards phone winner: rejected retry, same-view next r
     body: JSON.stringify({ expectedRevision: 1, submissionId, ...await sealRoundAnswers({ v: 1, answers: [{ n: 1, kind: "own", text: "Actual phone winner" }] }, grill, { ...ids, round: 1 }) }) });
   assert.equal(phone.status, 204);
   await frame.getByText("This round was submitted from another view. The host follow-up was not confirmed.", { exact: false }).waitFor();
-  assert.equal(messages.length, 1); assert.ok(messages[0].content[0].text.includes(submissionId));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].content[0].text, `Grill-me Game: answers ready for session ${ids.id}, round 1, submission ${submissionId}.`);
   assert.equal((await call("grill_ui_state", { link })).structuredContent.snapshot.state, "answered", "rejected notification never ACKs");
   assert.equal(calls.filter(c => c.name === "grill_ui_submit").length, 0, "first round used actual phone HTTP");
   await frame.getByRole("button", { name: "Retry", exact: true }).click();

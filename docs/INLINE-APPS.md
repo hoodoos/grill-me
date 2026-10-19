@@ -36,8 +36,9 @@ The exact sealed submission intent is retained for uncertain POST retries, never
 
 After authenticated submission success, or when its authenticated current-state poll
 observes an `answered` snapshot from the phone/another view, a host supporting `message.text` receives
-`ui/message` with a text-content ARRAY containing fixed continuation instructions and
-round/submission metadata, no key/questions/answers. Rejection (including resolved
+`ui/message` with a text-content ARRAY containing one compact line identifying the
+session, round and winning submission, no key/questions/answers. Model continuation
+instructions remain in initialize/tool guidance, not the visible notification. Rejection (including resolved
 `isError:true`) remains retryable. Acceptance is NOT model receipt or ACK. Lost replies
 can produce at-least-once follow-ups; per-view intent deduplication and relay CAS protect
 rounds, not a claim of globally exactly-once model processing. The agent still waits,
@@ -73,8 +74,16 @@ or has no unsubmitted draft. Never allocate a replacement session to recover unc
 answers, or discard a partial draft merely to refresh the view.
 
 Actual `ui/initialize` capabilities determine bridge/message/display-mode support.
-Both fixed container height and maxHeight are honored; the unchanged560px card remains
-inside a full-width bounded swipe stage. Unsupported hosts get the existing phone path.
+Fixed container height is authoritative. For a soft maxHeight ceiling, inline mode
+requests a compact480px allocation (or the smaller ceiling), without resize feedback
+loops. Fullscreen uses the actual allocation and host-provided safe-area insets inside
+its border box. A mode-only return discards stale fullscreen dimensions and requests
+the saved compact inline allocation again. The unchanged560px card remains inside a
+full-width bounded swipe stage. Unsupported hosts get the existing phone path.
+For a fixed allocation below350px of usable height, a host-only compact summary shows
+the current round/title and Full screen action (or the same phone-link fallback).
+The existing card node and draft remain mounted but hidden, then reappear when the host
+provides enough space; the app never pretends a150px allocation fits the swipe controls.
 ChatGPT and Claude document MCP Apps support; Grok inline rendering remains UNVERIFIED.
 SDK/sandbox tests do not establish actual account/model behavior or hardware acceptance.
 
