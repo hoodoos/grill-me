@@ -81,7 +81,8 @@ test("failed atomic cache persistence prevents delivery and DELETE; concurrent w
   await fs.writeFile(otherTemp, "keep");
   const rename = fs.rename.bind(fs);
   const fault = t.mock.method(fs, "rename", async () => { throw new Error("injected cache rename failure"); });
-  await assert.rejects(wait(id, { home, seconds: 1 }), /injected cache rename failure/);
+  // This tests persistence failure, not scheduler speed before the injected rename.
+  await assert.rejects(wait(id, { home }), /injected cache rename failure/);
   fault.mock.restore();
   assert.equal(deletes(fake).length, 0);
   assert.equal((await readPending(home, id)).answerBlob, undefined);
@@ -130,8 +131,9 @@ test("cancellation/deadline between collection and ack does not DELETE cached an
   await assert.rejects(result.ack(), { code: "aborted" });
   assert.equal(deletes(fake).length, 0);
   await assertCache(home, id);
-  const expired = await wait(id, { home, seconds: 0.08 });
-  await sleep(100);
+  let clock = 0;
+  const expired = await wait(id, { home, seconds: 5, now: () => clock });
+  clock = 5001; // expire precisely after collection, rather than racing filesystem latency
   assert.equal(expired.canDeliver(), false);
   await assert.rejects(expired.ack(), { code: "deadline" });
   assert.equal(deletes(fake).length, 0);
@@ -142,20 +144,23 @@ for (const mode of ["stalled headers", "slow reply", "committed lost reply", "co
   test(`ack handles DELETE ${mode} without answer loss, then replays cache before any GET`, async (t) => {
     const { home, fake, id } = await fixture(t);
     const ctrl = new AbortController();
-    const result = await wait(id, { home, seconds: 0.2, signal: ctrl.signal });
+    const budget = 2; // include real fetch/crypto/fsync setup on shared CI runners
+    const started = performance.now();
+    const result = await wait(id, { home, seconds: budget, signal: ctrl.signal });
+    assert.equal(result.status, "ANSWERS", "collect the ciphertext before testing DELETE cleanup");
     if (mode === "stalled headers") fake.intercept((req) => req.method === "DELETE");
     else if (mode === "503") fake.intercept((req, res) => {
       if (req.method !== "DELETE") return false;
       res.writeHead(503).end(); return true;
     });
     else fake.afterDelete((_req, res) => {
-      if (mode === "slow reply") setTimeout(() => res.writeHead(204).end(), 350);
+      if (mode === "slow reply") setTimeout(() => res.writeHead(204).end(), 2500);
       if (mode === "committed cancellation") ctrl.abort();
       return true;
     });
-    const start = performance.now();
     await assert.rejects(result.ack());
-    assert.ok(performance.now() - start < 900, "cleanup uses the original short deadline");
+    assert.ok(performance.now() - started < budget * 1000 + 700,
+      "collection and cleanup share the original deadline, with no fresh cleanup budget");
     await assertCache(home, id);
     if (mode.startsWith("committed") || mode === "slow reply") assert.equal(fake.grill(id), undefined);
     fake.intercept(() => false);

@@ -10,7 +10,7 @@ import { readPending } from "../src/pending.js";
 import { deriveSessionKeys, sealRoundAnswers } from "../../core/src/session.js";
 import { newId } from "../../core/src/crypto.js";
 
-test("actual stdio: complete upstream instructions, same-id rounds and finish (HTTP-simulated phone)", { timeout: 12000 }, async t => {
+test("actual stdio: complete upstream instructions, same-id rounds and finish (HTTP-simulated phone)", { timeout: 30000 }, async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "gm-session-stdio-"));
   const srv = createServer();
   await new Promise(r => srv.server.listen(0, "127.0.0.1", r));
@@ -66,19 +66,21 @@ test("actual stdio: complete upstream instructions, same-id rounds and finish (H
     assert.equal(response.status, 204);
   };
   const idle = async id => {
-    const until = performance.now() + 2000;
+    const until = performance.now() + 5000;
     while ((await readPending(home, id))?.state !== "idle") {
       assert.ok(performance.now() < until, "stdout reply must be followed by successful ACK cleanup");
       await new Promise(r => setTimeout(r, 10));
     }
   };
   await answer(first.id);
-  const one = await call("grill_wait", { id: first.id, seconds: 2 });
+  // This is the successful multi-round transport workflow. Short-budget/cancellation paths
+  // have separate real-socket tests; allow durable Windows fsync/lock work to complete here.
+  const one = await call("grill_wait", { id: first.id, seconds: 15 });
   assert.equal(one.answers, "Q1 - agree\nQ2 - agree"); await idle(first.id);
   const second = await call("grill_send", { session: true, id: first.id, round: 2, text });
   assert.equal(second.link, first.link); assert.equal(second.round, 2);
   await answer(first.id);
-  const two = await call("grill_wait", { id: first.id, seconds: 2 });
+  const two = await call("grill_wait", { id: first.id, seconds: 15 });
   assert.equal(two.round, 2); assert.equal(two.status, "ANSWERS"); await idle(first.id);
   assert.equal((await call("grill_finish", { id: first.id })).status, "FINISHED");
   assert.equal(await readPending(home, first.id), null);
