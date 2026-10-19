@@ -21,13 +21,18 @@ const fail = code => { throw Object.assign(new Error(code), { safeCode: code });
 const field = (description, type = "string") => ({ type, description });
 const linkField = field("The exact private https://grill-me.ai/g/...?...#... link returned by grill_start. Never substitute another host.");
 const annotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+// The shared format supports transport-only callers without advice. Hosted interviews follow
+// Matt's workflow: every frontier question must offer a recommendation that "yes" accepts.
+const HOSTED_GRILL_SCHEMA = structuredClone(GRILL_SCHEMA);
+HOSTED_GRILL_SCHEMA.properties.questions.items.required = ["title", "recommend"];
+HOSTED_GRILL_SCHEMA.properties.questions.items.properties.recommend.description = "Required recommended answer: include why and/or the advised choice. Word the question so yes accepts it.";
 const def = (name, description, properties, required, extra = {}) => ({ name, title: name.replaceAll("_", " "), description,
   inputSchema: { type: "object", properties, required, additionalProperties: false }, annotations: { ...annotations, ...extra } });
 const TOOLS = [
-  def("grill_start", "Allocate a private capability for a NEW interview before publishing any questions. No questions are stored by this step. Retain the returned link and reuse it for every round. A lost start reply has not published anything; start again only if you never received a link.", {}, [], { readOnlyHint: true, idempotentHint: false }),
-  def("grill_send", "Publish a ready frontier in Matt Pocock's format using the saved link, explicit round and idle expectedRevision (0 for first round). Pass exactly one of grill or text. Show ALL questions in chat, then Grill it on your phone plus link. On uncertain output retry EXACT same arguments/link/round; do not start again. Never replace a pending round or uncollected answers.", {
+  def("grill_start", "Start EVERY new Grill Me interview here, BEFORE drafting questions. The result includes the complete Matt Pocock grilling skill; read and follow it, not just the transport instructions. Map a design tree, ask only the whole settled-prerequisite frontier, number questions and give each a recommended answer so yes accepts it. Look up facts yourself; ask the user for decisions. Recompute after answers; stop only after an empty frontier and confirmed shared understanding. This allocates a private link only; retain it for every round. Lost start reply publishes nothing.", {}, [], { readOnlyHint: true, idempotentHint: false }),
+  def("grill_send", "Publish ONLY the current whole frontier after reading the full skill returned by grill_start. Prefer text in Matt's exact format: ❓ **Q1** - **Title**: body, then ➡️ recommended answer; separate numbered questions with ---. Every question needs a recommendation and yes must accept it. Keep dependent questions for later rounds. Structured grill is allowed with equivalent recommendations. Use saved link, explicit round and idle expectedRevision (0 first). Pass exactly one of grill or text. Show ALL questions in that format in chat, then Grill it on your phone plus link. Retry uncertain writes with EXACT saved arguments; never replace pending/uncollected content.", {
     link: linkField, round: field("Explicit round:1 first, then current+1.", "integer"), expectedRevision: field("0 on first publish, then exact idle revision from ACK.", "integer"),
-    grill: GRILL_SCHEMA, text: field("Complete frontier in the unchanged original Matt grilling text format."), title: field("Optional interview name."),
+    grill: HOSTED_GRILL_SCHEMA, text: field("Preferred: complete current frontier in Matt's original numbered ❓ question / ➡️ recommended-answer format, with --- between questions."), title: field("Optional interview name."),
   }, ["link", "round", "expectedRevision"]),
   def("grill_wait", "Wait for this exact round's answers (default45 seconds, max50). WAITING: call again with same link/round. ANSWERS: retain/read the actual answer lines THEN call grill_ack with the exact returned receipt. Merely returning answers never clears them. IDLE means already acknowledged; publish next round or finish.", {
     link: linkField, round: field("The explicit published round.", "integer"), seconds: field("Wall-clock wait budget, default45/max50 seconds.", "integer"),
@@ -44,6 +49,7 @@ const TOOLS = [
 ];
 const safeMessages = {
   INPUT: "Invalid tool arguments. Use the advertised schema; retain the same private link and explicit round.",
+  WORKFLOW: "Every frontier question needs a recommended answer so yes accepts it. Follow the full skill returned by grill_start; prefer its original numbered question and ➡️ recommendation text format. Retry with the same link and round.",
   CAPABILITY: "Invalid capability. Use the exact private Grill Me session link; other hosts are not accepted.",
   CONFLICT: "Conflicting or stale operation. Do not replace current questions or uncollected answers. Retry only the exact saved request or inspect the intended round.",
   LIMIT: "Hosted capacity limit reached. Retry later with the same saved arguments; do not create a new interview.",
@@ -128,7 +134,7 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
       const bytes = crypto.randomBytes(12), issued = Math.floor(now() / 1000);
       bytes.writeUInt32BE(issued, 0);
       return out("PREPARED", { link: makeSessionLink(bytes.toString("base64url"), newSecret(), ORIGIN), round: 1, expectedRevision: 0,
-        publishBefore: issued * 1000 + PREPARE_MS,
+        publishBefore: issued * 1000 + PREPARE_MS, grillingInstructions: HOSTED_INSTRUCTIONS,
         message: "Capability allocated only; no questions published. Retain this link and publish round1/revision0 within10minutes. Published sessions retain their normal refreshed1hour expiry." });
     }
     const ids = capability(args.link), keys = await deriveSessionKeys(ids.secret);
@@ -146,6 +152,7 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
         const validated = validateGrill({ ...converted.grill, ...(args.title !== undefined ? { title: args.title } : {}) });
         if (!validated.ok) fail("INPUT"); grill = validated.grill;
       } catch { fail("INPUT"); }
+      if (grill.questions.some(question => !question.recommend)) fail("WORKFLOW");
       // The keyed digest binds domain, session, round AND original expected revision. It is
       // an opaque retry identity, not plaintext retention; randomized AES nonces stay intact.
       const operationId = crypto.createHmac("sha256", keys.writeToken).update("grill-me/hosted/publish/v1\0")
@@ -192,7 +199,8 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
     if (r.status === 404) return ended(r); check(r);
     if (name === "grill_ack") {
       const current = await invoke("snapshot");
-      return out("ACKNOWLEDGED", { round: args.receipt.round, ...(current.status === 200 ? { currentRound: current.body.round, revision: current.body.revision, state: current.body.state } : {}) });
+      return out("ACKNOWLEDGED", { round: args.receipt.round, ...(current.status === 200 ? { currentRound: current.body.round, revision: current.body.revision, state: current.body.state } : {}),
+        next: "Use the collected answers to recompute the design-tree frontier. Continue with the next whole independent frontier on this SAME link; do not ask permission merely to continue grilling. Look up facts yourself and give every question a recommendation. Finish only when the frontier is empty and the user confirms shared understanding." });
     }
     return out(name === "grill_finish" ? "FINISHED" : "CANCELLED");
   }
@@ -262,7 +270,9 @@ export function createHostedMcp({ relay, stat, now = Date.now, version, limits =
       ]);
       // Some hosts expose only text content to their model. Include the exact capability,
       // state and ACK receipt there as well as structuredContent; PREPARED is never ready.
-      const text = value.status === "ANSWERS" ? `${value.answers}\nSTATUS: ANSWERS\nACK receipt: ${JSON.stringify(value.receipt)}\n${value.message}`
+      const text = value.status === "PREPARED"
+        ? `STATUS: PREPARED\n${JSON.stringify({ ...value, grillingInstructions: undefined })}\n\nRead and follow this complete grilling workflow BEFORE drafting questions:\n\n${value.grillingInstructions}\n\nPrivate capability only: publish the first round before showing the phone as ready.`
+        : value.status === "ANSWERS" ? `${value.answers}\nSTATUS: ANSWERS\nACK receipt: ${JSON.stringify(value.receipt)}\n${value.message}`
         : `STATUS: ${value.status}\n${JSON.stringify(value)}${value.status === "PREPARED" ? "\nPrivate capability only: publish the first round before showing the phone as ready." : ""}` +
           (value.status === "READY" ? "\nShow the complete questions, then:\nGrill it on your phone\n" + value.link : "");
       const body = response(id, { content: [{ type: "text", text }], structuredContent: value });

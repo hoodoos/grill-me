@@ -7,6 +7,10 @@ model-supplied URL. App mode handles keys/questions/answers transiently on the s
 only the existing encrypted current-round relay persists content. Local mode is unchanged.
 
 1. `grill_start({})` returns `PREPARED`, `link`, `round:1`, `expectedRevision:0`.
+   The result also includes the complete unchanged Matt skill in `grillingInstructions`
+   and literal text content. Read it BEFORE drafting questions: some app hosts do not
+   expose `initialize.instructions` to their model. The tool description summarizes the
+   design tree/frontier, recommendations, fact-finding and shared-understanding rules.
    It creates no relay row. Retain this capability BEFORE publishing. If this allocation
    reply is lost, no questions have been published and allocating another is harmless.
    Preparation is valid for10minutes before first publication (`publishBefore`). Its
@@ -14,6 +18,8 @@ only the existing encrypted current-round relay persists content. Local mode is 
    Once published, ordinary refreshed1hour session expiry applies. A very late first-round
    retry cannot recreate a dead interview after its10minute end receipt has been pruned.
 2. `grill_send({link,round,expectedRevision,grill? | text?,title?})` publishes a frontier.
+   Prefer the original numbered question/➡️ recommendation text format. Equivalent structured
+   input remains supported; hosted publishing rejects questions without recommendations.
    Show its complete questions, then “Grill it on your phone” and the link. All rounds
    reuse this link. First round uses revision0; later rounds require the current idle
    revision. Never replace pending questions or uncollected answers.
@@ -25,6 +31,8 @@ only the existing encrypted current-round relay persists content. Local mode is 
    `grill_ack({link,receipt})` clears that round's ciphertexts. Keep the ORIGINAL receipt
    for an exact lost-reply retry. `ACKNOWLEDGED` includes the current round/revision/state.
    A late old-round ACK cannot mutate a newer round. Unacknowledged answers can be read again.
+   Its result reminds the model to recompute the next frontier and continue the interview
+   on the same link, rather than asking permission merely to continue the requested grilling.
 5. Publish the next frontier with the same link, next round and idle revision. After Matt's
    shared-understanding confirmation, `grill_finish({link,expectedRevision})` requires idle
    state; pending/uncollected content conflicts. `grill_cancel({link})` explicitly aborts.
