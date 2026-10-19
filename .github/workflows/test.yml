@@ -18,4 +18,4 @@ jobs:
       - run: npm ci
       # Keep pack/build subprocesses from starving real-socket deadline tests on shared runners.
       # The tests themselves still exercise concurrent clients/processes and unchanged deadlines.
-      - run: npm test -- --test-concurrency=1
+      - run: node --test --test-concurrency=1
