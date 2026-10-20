@@ -4,7 +4,7 @@ export const HOSTED_DESCRIPTION = "Turn an idea into a friendly swipe-card inter
 export const hostedServerInfo = version => ({
   name: "grill-me-game", title: HOSTED_TITLE, version,
   description: HOSTED_DESCRIPTION, websiteUrl: "https://grill-me.ai/",
-  icons: [{ src: "https://grill-me.ai/grill-me-game.svg", mimeType: "image/svg+xml", sizes: ["128x128"] }],
+  icons: [{ src: "https://grill-me.ai/grill-me-game.svg?v=a27362e00dce", mimeType: "image/svg+xml", sizes: ["128x128"] }],
 });
 
 export const HOSTED_TOOL_TITLES = Object.freeze({

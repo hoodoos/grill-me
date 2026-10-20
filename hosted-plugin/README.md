@@ -56,7 +56,7 @@ actual ChatGPT/Claude/Grok rendering or automatic continuation.
 The three included706×800 PNGs are unedited captures of the public website demo, in starter
 order: `store-demo.png`, `store-swipe.png`, `store-own-answer.png`. They illustrate the
 shared cards, not an actual ChatGPT store/account render. The SVG logo reuses the existing
-blue card/flame favicon at128×128 with a matching square viewBox. Screenshots are accepted
+blue fanned-card favicon, matching the waiting card stack, at128×128 with a square viewBox. Screenshots are accepted
 as optional listing assets, but current directory guidelines do not promise their display.
 
 Official references (checked 2026-10-19):
