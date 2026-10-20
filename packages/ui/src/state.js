@@ -18,6 +18,9 @@ export function createState(grill, saved) {
     pos: Math.min(saved?.pos ?? 0, n),
     skipped: saved?.skipped ? saved.skipped.slice() : [],
     drafts: { ...(saved?.drafts || {}) },
+    choiceDrafts: Object.fromEntries(Object.entries(saved?.choiceDrafts || {}).filter(([i, names]) =>
+      grill.questions[i]?.multi && Array.isArray(names)).map(([i, names]) =>
+      [i, [...new Set(names.filter(name => grill.questions[i].choices.some(c => c.name === name)))]])),
     hist: [],
     view: "card",
     jumpBack: false,
@@ -27,7 +30,8 @@ export function createState(grill, saved) {
   s.view = s.pos >= n ? "summary" : needsText(current(s)) ? "text" : "card";
 
   const gi = () => s.order[s.pos];
-  const snap = () => ({ answers: s.answers.slice(), order: s.order.slice(), pos: s.pos, skipped: s.skipped.slice(), jumpBack: s.jumpBack });
+  const copyChoices = () => Object.fromEntries(Object.entries(s.choiceDrafts).map(([i, names]) => [i, names.slice()]));
+  const snap = () => ({ answers: s.answers.slice(), order: s.order.slice(), pos: s.pos, skipped: s.skipped.slice(), jumpBack: s.jumpBack, choiceDrafts: copyChoices() });
 
   // On to the next unanswered card; after a card opened from the summary, back to the summary.
   const advance = () => {
@@ -39,6 +43,7 @@ export function createState(grill, saved) {
 
   const answer = (a) => {
     s.hist.push(snap());
+    delete s.choiceDrafts[gi()];
     s.answers[gi()] = a;
     advance();
   };
@@ -76,6 +81,13 @@ export function createState(grill, saved) {
     setDraft(text) {
       s.drafts[gi()] = text;
     },
+    choiceDraft() {
+      const i = gi();
+      if (Object.hasOwn(s.choiceDrafts, i)) return s.choiceDrafts[i].slice();
+      const answer = s.answers[i];
+      return answer?.kind === "choice" ? [...(Array.isArray(answer.choice) ? answer.choice : [answer.choice])] : [];
+    },
+    setChoiceDraft(names) { s.choiceDrafts[gi()] = names.slice(); },
     // A skipped card goes to the end once; skipped again, it's sent as "skip for now".
     skip() {
       const i = gi();
@@ -88,6 +100,7 @@ export function createState(grill, saved) {
         return advance();
       }
       s.answers[i] = { kind: "skip" };
+      delete s.choiceDrafts[i];
       advance();
     },
     // Back one step, as many times as you like; the card shows what you had answered.
@@ -114,7 +127,7 @@ export function createState(grill, saved) {
 
     // What the host persists (it adds its own timestamp/fingerprint).
     snapshot() {
-      return { answers: s.answers.slice(), order: s.order.slice(), pos: s.pos, skipped: s.skipped.slice(), drafts: { ...s.drafts } };
+      return { answers: s.answers.slice(), order: s.order.slice(), pos: s.pos, skipped: s.skipped.slice(), drafts: { ...s.drafts }, choiceDrafts: copyChoices() };
     },
     // The core answers object: one answer per question, in grill order; unanswered → skip.
     toAnswers() {

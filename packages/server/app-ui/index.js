@@ -2,6 +2,7 @@ import { App } from "@modelcontextprotocol/ext-apps";
 import { mountGrill } from "../../ui/src/grill.js";
 import { parseSessionLink, openRound, sealRoundAnswers } from "../../core/src/session.js";
 import { newId, isId } from "../../core/src/crypto.js";
+import { LIMITS } from "../../core/src/format.js";
 
 const app = new App({ name: "Grill Me", version: "0.2.0" }, { availableDisplayModes: ["inline", "fullscreen"] }, { autoResize: false });
 const $ = id => document.getElementById(id);
@@ -102,6 +103,7 @@ async function accept(snapshot) {
     if (!alive || g !== generation) return;
     grill = decoded; $("status").hidden = true; $("cards").hidden = false;
     ui = mountGrill($("grill-root"), { grill, saved: draft,
+      answerLimits: { ownChars: LIMITS.ownChars, jsonBytes: LIMITS.answersBytes - 16 }, // AES-GCM tag
       onChange: snap => { if (alive && generation === g) { draft = snap; compactLayout(); } },
       onSend: answers => { if (!alive || generation !== g) throw new Error("Round moved on."); return send(answers); },
     });

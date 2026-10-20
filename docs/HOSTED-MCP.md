@@ -76,8 +76,9 @@ temporary files. Other locations remain unchanged.
 
 Hosted tool definitions/instructions are server-only. The complete pinned original Matt
 skill is read unchanged into initialize instructions; the first512characters contain the
-essential hosted delivery/ACK workflow. Local core/CLI/plugin files and frozen0.2 artifacts
-remain byte-identical; website/deployment source binding advances independently.
+essential hosted delivery/ACK workflow. Core crypto, CLI and plugin behavior remain compatible.
+Later shared UI answer fixes require fresh client artifacts; old frozen artifacts retain their
+original bytes/provenance and must not be relabelled as containing those UI fixes.
 
 Actual Claude/ChatGPT account setup and model behavior require separate observation after
 deployment. SDK/HTTP/Chrome tests establish transport/phone behavior, not account support.

@@ -147,10 +147,18 @@ CLI polling remains supported. Output does not block on cleanup; next send resol
 ## Browser state / transport cache / UI
 
 Use a unique new entry module `/entry-020.js`: dispatch `?session=2` to new `/session-app.js`; legacy
-routes import unchanged `/app.js`. HTML points to the new entry path. New session app imports the new
+routes import the compatible one-shot `/app.js` adapter. HTML points to the new entry path. New session app imports the new
 `/core/session.js` directly, avoiding cached0.1 `/app.js`/coreindex. Entry query alone is insufficient to
 invalidate relative imports. Require warm0.1 cache ->0.2 in SAME browser context with no cacheclear/hardreload.
-No CSS/gesture changes: use existing mountGrill and hard viewport/touch styling unchanged.
+Card geometry, CSS and gesture thresholds remain unchanged. Answer-correctness fixes now bind
+each delayed swipe to its original card, briefly lock overlapping answer actions during commit,
+and cancel gesture/focus timers on destroy. Partial multi-choice selections are part of the
+current-round draft and are restored when editing an existing answer. Changed shared UI/state,
+legacy adapter and session-entry URLs are versioned together to avoid warm stale modules.
+Phone and embedded hosts supply the wire budget to the shared UI: no more than4000characters
+per own answer, and8192bytes for the complete encrypted answer object (including its16byte
+GCM tag). Preflight checks use UTF8 JSON bytes, preserve all text and selections, and ask the
+user to shorten an oversized answer before any POST. Copy answers remains available on the phone.
 
 Only current session key, currentround/grill/unconfirmed draft and exact encrypted outgoing submission
 intent are retained locally under session+round identity, not contentHash. Identical questions in a

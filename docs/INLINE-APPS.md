@@ -93,7 +93,9 @@ mixed Apache/MIT transition text rather than inferring a license from its manife
 
 The public compiled template is cached once/process. Resource reads are limited to four
 in flight, sixty/minute globally, with ten-second slow-reader cutoff. Private server
-dependencies are pinned; none of the frozen29 published payload bytes are changed.
+dependencies are pinned. The original frozen package artifacts keep their original provenance;
+the later shared UI answer fixes change the UI/state payload files and require fresh client
+artifacts before publication. They do not change core crypto, the Matt skill or CLI behavior.
 
 References: [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview),
 [ChatGPT UI](https://developers.openai.com/plugins/build/chatgpt-ui). The installed

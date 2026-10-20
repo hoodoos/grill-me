@@ -23,14 +23,10 @@ const pinnedAvailable = (() => {
 })();
 const pinned = (p) => execFileSync("git", ["-C", ROOT, "show", `${PINNED_BASE}:${p}`], { maxBuffer: 4 << 20 }).toString("utf8");
 
-// Everything the 0.1 page loads that must stay byte-identical: the legacy app, the shared UI
-// (grill.js/state.js/text.js/grill.css — no CSS/gesture changes in 0.2.0) and the legacy core
-// modules. core/index.js is exempt by design (it gains the v2 session exports for Node clients);
-// browsers never import it here.
+// Legacy crypto/format vectors, safe text and CSS remain frozen. The shared state/UI and
+// phone adapters now intentionally fix gesture commits, multi-drafts and answer budgets;
+// their changed module URLs must invalidate warm browser copies below.
 const LEGACY_FROZEN = [
-  "packages/server/public/app.js",
-  "packages/ui/src/grill.js",
-  "packages/ui/src/state.js",
   "packages/ui/src/text.js",
   "packages/ui/src/grill.css",
   "packages/core/src/crypto.js",
@@ -40,7 +36,7 @@ const LEGACY_FROZEN = [
   "packages/core/src/grill-text.js",
 ];
 
-test("legacy modules the session page shares stay byte-identical to the pinned 0.1 base", { skip: !pinnedAvailable && "pinned base object unavailable (shallow clone)" }, () => {
+test("legacy crypto, format, safe text and CSS stay byte-identical to the pinned 0.1 base", { skip: !pinnedAvailable && "pinned base object unavailable (shallow clone)" }, () => {
   for (const p of LEGACY_FROZEN) {
     assert.equal(read(p), pinned(p), `${p} changed; the 0.2.0 phone side must not touch legacy bytes`);
   }
@@ -55,7 +51,7 @@ test("grill.html changes only cache URLs for the entry and standalone host style
   const iconVersion = createHash("sha256").update(read("packages/server/public/favicon.svg")).digest("hex").slice(0, 12);
   assert.deepEqual(diffs, [[base.find(l => l.includes('rel="icon"')), `<link rel="icon" href="/favicon.svg?v=${iconVersion}" type="image/svg+xml">`],
     [base.find(l => l.includes('/style.css?')), `<link rel="stylesheet" href="/style.css?v=${styleVersion}">`],
-    ['<script type="module" src="/app.js"></script>', '<script type="module" src="/entry-020.js?v=wait-capacity-3"></script>']],
+    ['<script type="module" src="/app.js"></script>', '<script type="module" src="/entry-020.js?v=answer-fixes-4"></script>']],
     "only changed standalone assets gain cache versions; the shared CSS URL stays untouched");
 });
 
@@ -70,11 +66,11 @@ test("the session page and its module graph are served with correct types", asyn
     const page = await fetch(`${origin}/g/${id}?session=2`);
     assert.equal(page.status, 200);
     const html = await page.text();
-    assert.match(html, /src="\/entry-020\.js\?v=wait-capacity-3"/, "the grill page enters through the versioned entry");
+    assert.match(html, /src="\/entry-020\.js\?v=answer-fixes-4"/, "the grill page enters through the versioned entry");
     const csp = page.headers.get("content-security-policy");
     assert.match(csp, /default-src 'self'/, "strict CSP intact");
 
-    for (const [p, name] of [["/entry-020.js?v=wait-capacity-3", "entry"], ["/session-app.js?v=wait-capacity-3", "session app"], ["/core/session.js", "session crypto"]]) {
+    for (const [p, name] of [["/entry-020.js?v=answer-fixes-4", "entry"], ["/session-app.js?v=answer-fixes-4", "session app"], ["/core/session.js", "session crypto"]]) {
       const r = await fetch(origin + p, { cache: "no-store" });
       assert.equal(r.status, 200, `${name} served`);
       assert.match(r.headers.get("content-type"), /text\/javascript/, `${name} served as a JS module`);

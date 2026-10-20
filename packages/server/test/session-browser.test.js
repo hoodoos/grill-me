@@ -21,7 +21,7 @@ for(const f of cp.execFileSync('git',['ls-tree','-r','--name-only',pin,'packages
  frozen.set(url,cp.execFileSync('git',['show',pin+':'+f],{cwd:repo}));
 }
 proxy=http.createServer((req,res)=>{
- const p=new URL(req.url,'http://test').pathname;requests.push({phase,path:p});
+ const requestUrl=new URL(req.url,'http://test'),p=requestUrl.pathname;requests.push({phase,path:p,search:requestUrl.search});
  if(apiOffline && p.startsWith('/api/')) return res.destroy();
  if(phase===1&&!p.startsWith('/api/')) {
    const body=frozen.get(p.startsWith('/g/')?'/grill.html':p);
@@ -147,9 +147,13 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
      return value;
    };
    const timer = setTimeout;
-   globalThis.setTimeout = (fn, ms, ...args) => ms === 200
-     ? timer(() => { globalThis.oldSwipeRan = true; fn(...args); }, 1000)
-     : timer(fn, ms, ...args);
+   const clear = clearTimeout;
+   globalThis.setTimeout = (fn, ms, ...args) => {
+     if(ms !== 200) return timer(fn, ms, ...args);
+     globalThis.forceOldSwipe = () => { globalThis.oldSwipeForced = true; fn(...args); };
+     return globalThis.oldSwipeTimer = timer(() => { globalThis.oldSwipeRan = true; fn(...args); }, 1000);
+   };
+   globalThis.clearTimeout = id => { if(id === globalThis.oldSwipeTimer && id !== undefined) globalThis.oldSwipeCancelled = true; return clear(id); };
  });
  const late=await sendRound(grill,opts);
  await page.goto(late.link);await page.waitForFunction(()=>globalThis.oldDecryptReady===true);await page.locator('.gm-card').waitFor();
@@ -161,7 +165,9 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  await sendRound(grill,{...opts,id:late.id,round:2});
  await page.waitForFunction(id=>!!localStorage.getItem(`gm:s2:r:${id}:2`),late.id);
  await page.locator('.gm-card').waitFor();await page.evaluate(()=>globalThis.releaseOldDecrypt());
- await page.waitForFunction(()=>globalThis.oldSwipeRan===true);
+ await page.waitForFunction(()=>globalThis.oldSwipeCancelled===true);
+ assert.equal(await page.evaluate(()=>globalThis.oldSwipeRan===true),false,'destroy cancels the old gesture timer');
+ await page.evaluate(()=>globalThis.forceOldSwipe()); // even an already-queued retired callback must be harmless
  assert.equal(await page.evaluate(id=>localStorage.getItem(`gm:s2:r:${id}:1`),late.id),null);
  assert.equal(await page.locator('.gm-send').count(),0);
  assert.equal(await page.locator('.gm-card').isVisible(),true);
@@ -172,6 +178,7 @@ const legacy=await send(grill,opts);await page.goto(legacy.link);await page.loca
  assert.equal(await page.locator('.gm-card').count(),0);
  await cancel(wrong.id,opts);await page.locator('#message-text').filter({hasText:'This grill was cancelled.'}).waitFor();
  assert.deepEqual(errors,[]);
+ for(const p of ['/ui/grill.js','/ui/state.js']) assert.ok(requests.some(r=>r.phase===2&&r.path===p&&r.search==='?v=answer-fixes-1'),'changed shared module bypasses old warm cache: '+p);
  assert.equal(requests.some(r=>r.phase===2&&['/app.js','/core/index.js','/core/crypto.js'].includes(r.path)),false,'unchanged legacy modules were actually reused from the warm cache');
  console.log(JSON.stringify({result:'PASS',warmSameOriginCache:true,cacheCleared:false,networkRoutesUsed:false,rounds:2,stableLink:true,actualTouch:['right-agree','left-own'],reloadDraft:true,short350:bounds,finishPurge:true,offlineApiReload:true,immutableSubmission:true,losingDeviceCopy:true,lateAsyncAndTabGuards:true,pageerrors:errors,requests},null,2));
 

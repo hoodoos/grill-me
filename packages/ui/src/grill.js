@@ -10,21 +10,37 @@
 // onChange(snapshot): fires on every change; the host persists the snapshot.
 // onSend(answers): returns a promise; the UI shows "Sending…" until it settles.
 // note: a host message shown above the list/summary (e.g. "This grill expired").
-import { createState } from "./state.js";
+// answerLimits: optional host wire budget { ownChars, jsonBytes }, excluding encryption overhead.
+import { createState } from "./state.js?v=answer-fixes-1";
 import { renderText } from "./text.js";
 
 const SKIP_LINE = "skip for now, ask again later";
 const oneLine = (t) => String(t).replace(/\s*\n+\s*/g, " ").trim();
 const norm = (t) => " " + String(t ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim() + " ";
 
-export function mountGrill(root, { grill, saved = null, onChange = () => {}, onSend = () => Promise.resolve(), note = "" }) {
+export function mountGrill(root, { grill, saved = null, onChange = () => {}, onSend = () => Promise.resolve(), note = "", answerLimits = null }) {
   const doc = root.ownerDocument;
   const mach = createState(grill, saved);
   const S = mach.state;
   let sending = false;
   let focusText = false;
   let noteText = note || "";
-  const multiPicked = new Set(); // selected choice names while on a multi card
+  let alive = true, renderVersion = 0, pendingSwipe = null, focusTimer;
+  const canAct = () => alive && !pendingSwipe;
+  const ownError = (text) => answerLimits && text.trim().length > answerLimits.ownChars
+    ? `This answer is too long. Shorten it to ${answerLimits.ownChars} characters or fewer; your text has been kept.` : "";
+  const sendError = (answers) => {
+    if (!answerLimits) return "";
+    for (const a of answers.answers) if (a.kind === "own" && ownError(a.text)) return `Q${a.n}: ${ownError(a.text)}`;
+    return new TextEncoder().encode(JSON.stringify(answers)).byteLength > answerLimits.jsonBytes
+      ? "These answers are too long to send together. Shorten one or more answers and send again. Your answers have been kept." : "";
+  };
+  const cancelSwipe = () => {
+    if (!pendingSwipe) return;
+    clearTimeout(pendingSwipe.timer);
+    for (const [button, disabled] of pendingSwipe.buttons) button.disabled = disabled;
+    pendingSwipe = null;
+  };
 
   root.classList.add("gm-root");
   root.textContent = "";
@@ -48,7 +64,7 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
 
   const changed = () => onChange(mach.snapshot());
   const act = (fn, ...args) => {
-    multiPicked.clear();
+    if (!canAct()) return;
     fn(...args);
     changed();
     render(true);
@@ -66,6 +82,8 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
   };
 
   function render(animate) {
+    if (!alive) return;
+    cancelSwipe(); clearTimeout(focusTimer); renderVersion++;
     const inList = S.view === "summary" || S.view === "list";
     titleEl.textContent = grill.title || "Questions";
     listBtn.textContent = S.view === "list" ? "Back" : "Questions";
@@ -84,7 +102,10 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
   }
 
   function renderCard(animate) {
+    const version = renderVersion;
+    const currentAction = fn => { if (canAct() && version === renderVersion) act(fn); };
     const i = mach.currentIndex(), q = grill.questions[i], a = S.answers[i], text = S.view === "text";
+    const multiPicked = new Set(q.multi ? mach.choiceDraft() : []);
     stage.textContent = "";
     bar.textContent = "";
     const card = el("div", "gm-card" + (animate ? " enter" : ""));
@@ -152,10 +173,12 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
         b.append(name);
         if (q.multi && c.detail) b.append(el("span", "gm-choice-detail", c.detail));
         b.addEventListener("click", () => {
+          if (!canAct() || version !== renderVersion) return;
           if (q.multi) {
             if (multiPicked.has(c.name)) multiPicked.delete(c.name);
             else multiPicked.add(c.name);
             b.classList.toggle("on");
+            mach.setChoiceDraft([...multiPicked]); changed();
           } else act(() => mach.choose(c.name));
         });
         box.append(b);
@@ -164,7 +187,7 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
         const next = el("button", "gm-primary gm-multi-next", "Next");
         next.type = "button";
         next.addEventListener("click", () => {
-          if (!multiPicked.size) return;
+          if (!canAct() || version !== renderVersion || !multiPicked.size) return;
           const names = [...multiPicked];
           multiPicked.clear();
           act(() => mach.choose(names));
@@ -182,25 +205,35 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
       input.rows = 4;
       input.placeholder = q.recommend ? "Your own answer…" : "Your answer…";
       input.value = S.drafts[i] ?? (a?.kind === "own" ? a.text : S.hint?.i === i && S.hint.a.kind === "own" ? S.hint.a.text : "");
-      input.addEventListener("input", () => { mach.setDraft(input.value); changed(); });
+      let inputNote;
+      const updateInputNote = () => {
+        const error = ownError(input.value);
+        if (!error) { inputNote?.remove(); inputNote = null; return; }
+        if (!inputNote) { inputNote = el("div", "gm-note"); inputNote.role = "alert"; scroll.append(inputNote); }
+        inputNote.textContent = error;
+      };
+      updateInputNote();
+      input.addEventListener("input", () => { mach.setDraft(input.value); changed(); updateInputNote(); });
       const row = el("div", "gm-row");
       if (q.recommend) {
         const back = el("button", "", "Back");
         back.type = "button";
-        back.addEventListener("click", () => { mach.closeText(); render(); });
+        back.addEventListener("click", () => { if (canAct() && version === renderVersion) { mach.closeText(); render(); } });
         row.append(back);
       }
       row.append(el("span", "gm-spacer"));
       const next = el("button", "gm-primary", "Next");
       next.type = "button";
       next.addEventListener("click", () => {
+        if (!canAct() || version !== renderVersion) return;
+        if (ownError(input.value)) { inputNote?.scrollIntoView?.({ block: "nearest" }); return; }
         if (mach.own(input.value)) { changed(); render(true); }
         else input.focus();
       });
       row.append(next);
       twrap.append(input, row);
       card.append(twrap);
-      if (focusText) { focusText = false; setTimeout(() => input.focus(), 60); }
+      if (focusText) { focusText = false; const version = renderVersion; focusTimer = setTimeout(() => { if (alive && renderVersion === version) input.focus(); }, 60); }
     }
     stage.append(card);
     // Bottom bar: undo, ✗ own, Skip, ✓ agree.
@@ -208,25 +241,25 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
     undo.type = "button";
     undo.title = "Undo";
     undo.disabled = !S.hist.length;
-    undo.addEventListener("click", () => act(() => mach.undo()));
+    undo.addEventListener("click", () => currentAction(() => mach.undo()));
     bar.append(undo);
     if (!text) {
       const own = el("button", "gm-no", "✗");
       own.type = "button";
       own.title = "My own answer";
-      own.addEventListener("click", () => { mach.startOwn(); focusText = true; render(); });
+      own.addEventListener("click", () => { if (canAct() && version === renderVersion) { mach.startOwn(); focusText = true; render(); } });
       bar.append(own);
     }
     const skip = el("button", "", "Skip");
     skip.type = "button";
-    skip.addEventListener("click", () => { multiPicked.clear(); act(() => mach.skip()); });
+    skip.addEventListener("click", () => currentAction(() => mach.skip()));
     bar.append(skip);
     if (!text) {
       const yes = el("button", "gm-yes", "✓");
       yes.type = "button";
       yes.title = "Agree";
       yes.disabled = !mach.canAgree();
-      yes.addEventListener("click", () => act(() => mach.agree()));
+      yes.addEventListener("click", () => currentAction(() => mach.agree()));
       bar.append(yes);
     }
     if (animate) requestAnimationFrame(() => requestAnimationFrame(() => card.classList.remove("enter")));
@@ -234,6 +267,8 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
   }
 
   function renderList() {
+    const version = renderVersion;
+    const currentAction = fn => { if (canAct() && version === renderVersion) act(fn); };
     const summary = S.view === "summary";
     list.textContent = "";
     bar.textContent = "";
@@ -247,7 +282,7 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
       const ans = el("div", "gm-a" + (a?.kind === "skip" || (!a && summary) ? " skip" : ""), showAnswer(q, a, summary));
       inner.append(ans);
       row.append(inner);
-      row.addEventListener("click", () => { multiPicked.clear(); mach.jump(i); render(true); });
+      row.addEventListener("click", () => { if (canAct() && version === renderVersion) { mach.jump(i); render(true); } });
       list.append(row);
     });
     if (summary) {
@@ -255,14 +290,18 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
       undo.type = "button";
       undo.title = "Undo";
       undo.disabled = !S.hist.length;
-      undo.addEventListener("click", () => act(() => mach.undo()));
+      undo.addEventListener("click", () => currentAction(() => mach.undo()));
       const send = el("button", "gm-primary gm-send", sending ? "Sending…" : "Send answers");
       send.type = "button";
       send.disabled = sending;
       send.addEventListener("click", async () => {
+        if (!canAct() || version !== renderVersion || sending) return;
+        const answers = mach.toAnswers(), error = sendError(answers);
+        if (error) { setNote(error); return; }
+        noteText = "";
         sending = true;
         render();
-        try { await onSend(mach.toAnswers()); }
+        try { await onSend(answers); }
         catch (e) { setNote(e?.userMessage || "Send failed. Your answers are still here — try again, or use Copy answers."); }
         finally { sending = false; render(); }
       });
@@ -270,7 +309,7 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
     } else {
       const back = el("button", "", "Back to the card");
       back.type = "button";
-      back.addEventListener("click", () => { mach.toggleList(); render(); });
+      back.addEventListener("click", () => { if (canAct() && version === renderVersion) { mach.toggleList(); render(); } });
       bar.append(back);
     }
   }
@@ -279,13 +318,15 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
   // back. The first 10 px decide between swiping and scrolling the card's text. With no
   // recommendation, a right swipe only budges.
   function bindSwipe(card, canAgree) {
+    const version = renderVersion, question = mach.currentIndex();
     const stamp = (cls) => card.querySelector(".gm-stamp." + cls);
     let st = null;
     card.addEventListener("pointerdown", (e) => {
-      if (e.button > 0 || e.target.closest("button, a, textarea, input, summary")) return;
+      if (!canAct() || version !== renderVersion || st || e.button > 0 || e.target.closest("button, a, textarea, input, summary")) return;
       st = { x: e.clientX, y: e.clientY, t: 0, id: e.pointerId, lock: null, dx: 0, over: 0 };
     });
     card.addEventListener("pointermove", (e) => {
+      if (!canAct() || version !== renderVersion) { st = null; return; }
       if (!st || e.pointerId !== st.id) return;
       const dx = e.clientX - st.x, dy = e.clientY - st.y;
       if (!st.lock) {
@@ -304,6 +345,7 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
       st.over = over;
     });
     const end = (e) => {
+      if (!canAct() || version !== renderVersion) { st = null; return; }
       if (!st || e.pointerId !== st.id) return;
       const s0 = st;
       st = null;
@@ -313,9 +355,17 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
       const go = e.type === "pointerup" && (Math.abs(s0.dx) >= w * 0.35 || (Math.abs(s0.dx) >= w * 0.2 && fast)) && (s0.dx < 0 || canAgree);
       if (!go) { card.style.transform = ""; stamp("agree").style.opacity = 0; stamp("own").style.opacity = 0; return; }
       const dir = Math.sign(s0.dx);
+      const commit = { buttons: [...root.querySelectorAll("button")].map(button => [button, button.disabled]), timer: null };
+      pendingSwipe = commit;
+      for (const [button] of commit.buttons) button.disabled = true;
       card.style.transform = `translateX(${dir * 130}%) rotate(${dir * 18}deg)`;
       card.style.opacity = "0";
-      setTimeout(() => {
+      commit.timer = setTimeout(() => {
+        if (!alive || pendingSwipe !== commit || version !== renderVersion || question !== mach.currentIndex()) {
+          if (pendingSwipe === commit) cancelSwipe();
+          return;
+        }
+        cancelSwipe();
         if (dir > 0) act(() => mach.agree());
         else { mach.startOwn(); focusText = true; render(); }
       }, 200);
@@ -324,11 +374,11 @@ export function mountGrill(root, { grill, saved = null, onChange = () => {}, onS
     card.addEventListener("pointercancel", end);
   }
 
-  listBtn.addEventListener("click", () => { mach.toggleList(); render(); });
+  listBtn.addEventListener("click", () => { if (canAct()) { mach.toggleList(); render(); } });
 
   render(true);
   return {
-    destroy() { root.classList.remove("gm-root"); root.textContent = ""; },
+    destroy() { alive = false; renderVersion++; cancelSwipe(); clearTimeout(focusTimer); root.classList.remove("gm-root"); root.textContent = ""; },
     answers: () => mach.toAnswers(), // what Copy answers uses while the cards are up
     setNote,
   };

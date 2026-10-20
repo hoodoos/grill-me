@@ -8,9 +8,8 @@
 //
 // Generation guards sit after every asynchronous boundary (fetch/decrypt and the swipe UI's
 // onChange): when a transition bumps the generation, stale round-N work can neither render nor
-// recreate storage. mountGrill.destroy() does not cancel the card's in-flight 200 ms swipe-commit
-// timer and an old render can repopulate the same root node, so every transition retires the
-// actual mount DOM node (a fresh same-id replacement): the old timer then renders a detached node.
+// recreate storage. Destroy also cancels UI gesture/focus timers; replacing the actual mount
+// DOM node provides a second boundary against retired nodes and asynchronous host callbacks.
 //
 // Delivery is only ever claimed from a POST the relay authenticated: a 204 (winner) or 200 (the
 // relay already holds this exact submission, digest-checked). A poll snapshot whose submissionId
@@ -21,7 +20,8 @@ import {
 } from "/core/session.js"; // direct import: never the cached 0.1 /core/index.js
 import { answerLines } from "/core/answers.js"; // legacy module, byte-unchanged since 0.1
 import { b64urlEncode } from "/core/crypto.js"; // legacy module, byte-unchanged since 0.1
-import { mountGrill } from "/ui/grill.js";
+import { LIMITS } from "/core/format.js";
+import { mountGrill } from "/ui/grill.js?v=answer-fixes-1";
 
 const $ = (id) => document.getElementById(id);
 const KEEP_MS = 3 * 86400000; // abandoned local state expires after 3 days
@@ -244,6 +244,7 @@ function mountRound(grill, round, snap, note) {
   show("screen-grill");
   grillUi = mountGrill($("grill-root"), {
     grill,
+    answerLimits: { ownChars: LIMITS.ownChars, jsonBytes: LIMITS.answersBytes - 16 }, // AES-GCM tag
     saved: snap,
     note,
     onChange: (s) => {

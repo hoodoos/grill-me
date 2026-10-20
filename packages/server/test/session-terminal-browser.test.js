@@ -185,7 +185,7 @@ test("terminal reasons in actual browser: warm0.2 cache, open poll, reconnect, n
   await page.reload(); await text("Session ended or expired.");
   assert.deepEqual(errors, []);
   for (const url of ["/entry-020.js", "/session-app.js"]) assert.ok(requests.some(r => r.phase === 1 && r.url === url));
-  for (const url of ["/entry-020.js?v=wait-capacity-3", "/session-app.js?v=wait-capacity-3"]) assert.ok(requests.some(r => r.phase === 2 && r.url === url));
+  for (const url of ["/entry-020.js?v=answer-fixes-4", "/session-app.js?v=answer-fixes-4"]) assert.ok(requests.some(r => r.phase === 2 && r.url === url));
   assert.ok(requests.some(r => r.phase === 1 && r.url === "/style.css?v=c0fdf4f95f99"));
   assert.ok(requests.some(r => r.phase === 2 && r.url.startsWith("/style.css?v=") && r.url !== "/style.css?v=c0fdf4f95f99"));
   assert.equal(requests.some(r => r.phase === 2 && ["/entry-020.js", "/session-app.js", "/core/session.js", "/ui/grill.js", "/ui/grill.css"].includes(r.url)), false,

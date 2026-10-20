@@ -11,7 +11,7 @@ import { createDocument } from "../../ui/test-support/dom.js";
 
 const source = (await readFile(new URL("../public/app.js", import.meta.url), "utf8"))
   .replace(/import \{([\s\S]*?)\} from "\/core\/index.js";/, "const {$1} = core;")
-  .replace('import { mountGrill } from "/ui/grill.js";', "")
+  .replace(/import \{ mountGrill \} from "\/ui\/grill\.js(?:\?[^"\n]+)?";/, "")
   .replace("else runGrill(id);", "else globalThis.ready = runGrill(id);");
 const plain = (v) => JSON.parse(JSON.stringify(v));
 const sample = () => core.convert(core.DEMO_TEXT).grill;

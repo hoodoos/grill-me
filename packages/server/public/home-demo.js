@@ -1,4 +1,4 @@
-import { mountGrill } from "/ui/grill.js";
+import { mountGrill } from "/ui/grill.js?v=answer-fixes-1";
 
 // No relay, storage or history: this interview exists only in this page's memory.
 const grill = { title: "A tiny grilling demo", questions: [
