@@ -493,6 +493,7 @@ async function syncOnce() {
 
 async function pollLoop() {
   let failures = 0;
+  let capacityUntil = 0; // bounded short polling when an answer collector needs our held slot
   while (alive) {
     if (!navigator.onLine) { pauseThinking(); failures = Math.max(failures, 1); await untilEvent(window, "online"); continue; }
     if (document.visibilityState !== "visible") {
@@ -503,9 +504,18 @@ async function pollLoop() {
     try {
       const ac = new AbortController();
       pollAbort = ac;
-      const query = refreshPoll || failures ? "wait=0" : `after=${revision}&wait=${POLL_WAIT_S}`;
+      const query = refreshPoll || failures ? "wait=0"
+        : `after=${revision}&wait=${performance.now() < capacityUntil ? 0 : POLL_WAIT_S}`;
       refreshPoll = false;
       r = await fetchBounded(`/api/s/${id}?${query}`, { signal: ac.signal }, POLL_BOUND_MS);
+      if (r.status === 429) {
+        pollAbort = null;
+        // The connection is healthy: keep the current draft/thinking state and read
+        // updates without holding a slot. Probe long polling again after ten seconds.
+        capacityUntil = performance.now() + 10_000;
+        await sleep(1000 + Math.floor(Math.random() * 300));
+        continue;
+      }
       if (r.status === 200) snap = await r.json();
       else if (r.status === 404) reason = await terminalReason(r);
       else if (r.status !== 204 && r.status !== 404) throw new Error(`HTTP ${r.status}`);
@@ -527,7 +537,7 @@ async function pollLoop() {
     } else if (r.status === 204 && awaitingNext && !$("screen-message").classList.contains("session-thinking")) {
       waiting(); // a successful unchanged poll confirms the idle state after reconnect
     }
-    if (alive) await sleep(150);
+    if (alive) await sleep(performance.now() < capacityUntil ? 1000 + Math.floor(Math.random() * 300) : 150);
   }
 }
 

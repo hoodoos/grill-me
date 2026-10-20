@@ -39,6 +39,14 @@ End receipts need no key, so key/plaintext purge is preserved while reload/recon
 tabs can still recover the authoritative message. No offline remote-erasure promise is made.
 Aggregated daily metrics are allowed, never per-session history. Existing rate/wait/IP caps apply jointly
 to legacy and session traffic, including phone update polls and agent answer polls.
+Answer-collection waits take priority over passive session-update polls: at capacity, the
+relay ends one same-interview view poll early and admits the answer wait within the existing
+per-interview and per-IP caps. It never displaces an answer wait or another interview.
+This is operation priority, not caller identity inferred from a header. Existing public
+encrypted-read and hosted capability-authentication rules remain unchanged. A phone whose
+held poll is rate-limited keeps its draft and checks revisions without waiting every1–1.3s,
+then retries long polling after10s. Ready answers remain immediately readable regardless
+of held-poll capacity; no retry acknowledges them.
 
 ## Crypto (new module, legacy unchanged)
 

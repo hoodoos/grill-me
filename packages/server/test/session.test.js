@@ -28,7 +28,7 @@ async function start(opts = {}) {
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   let closing;
-  return { base: `http://127.0.0.1:${server.address().port}`, close: () => (closing ??= close()), logs };
+  return { server, base: `http://127.0.0.1:${server.address().port}`, close: () => (closing ??= close()), logs };
 }
 
 const demoGrill = () => convert(DEMO_TEXT).grill;
@@ -710,6 +710,38 @@ test("waiter budgets are shared between legacy grills and sessions", async (ctx)
   assert.equal((await fetch(`${base}/api/s/${s.id}?after=1&wait=1`)).status, 429);
   await close();
   await Promise.all([w1, w2, w3]);
+});
+
+test("answer priority preserves active collectors, other interviews and IP limits; aborts release capacity", { timeout: 10_000 }, async ctx => {
+  const { server, base, close } = await start({ waitersPerGrill: 1, waitersPerIp: 1, statsToken: STATS_TOKEN });
+  const controllers = [];
+  ctx.after(async () => { controllers.forEach(c => c.abort()); server.closeAllConnections(); await close(); });
+  const a = await createSession(base), b = await createSession(base);
+  const held = (url, extra = {}) => {
+    const controller = new AbortController(); controllers.push(controller);
+    const request = { controller, settled: false };
+    request.promise = fetch(url, { signal: controller.signal, ...extra }).then(r => { request.settled = true; return r; }, () => null);
+    return request;
+  };
+  const count = async () => (await (await fetch(base + "/stats/data.json", { headers: bearer({ writeToken: STATS_TOKEN }) })).json()).live.waiters;
+  const until = async n => {
+    const deadline = performance.now() + 2000;
+    while (await count() !== n) { assert.ok(performance.now() < deadline); await new Promise(r => setTimeout(r, 10)); }
+  };
+  const first = held(`${base}/api/s/${a.id}/rounds/1/answers?wait=30`);
+  await until(1);
+  assert.equal((await fetch(`${base}/api/s/${a.id}/rounds/1/answers?wait=1`)).status, 429, "another collector cannot evict the active collector");
+  assert.equal((await fetch(`${base}/api/s/${a.id}?after=1&wait=1`, { headers: { "x-grill-role": "answers" } })).status, 429, "a caller header cannot promote a view request");
+  assert.equal(first.settled, false);
+  first.controller.abort(); await first.promise; await until(0);
+  const view = held(`${base}/api/s/${a.id}?after=1&wait=30`);
+  await until(1);
+  assert.equal((await fetch(`${base}/api/s/${b.id}/rounds/1/answers?wait=1`)).status, 429, "priority cannot steal another interview's IP capacity");
+  assert.equal(view.settled, false);
+  const same = held(`${base}/api/s/${a.id}/rounds/1/answers?wait=30`);
+  assert.equal((await view.promise).status, 204, "the same interview's passive view yields its slot");
+  await until(1); assert.equal(same.settled, false);
+  same.controller.abort(); await same.promise; await until(0);
 });
 
 test("the create rate limit is shared between legacy grills and sessions per IP", async (ctx) => {

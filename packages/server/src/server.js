@@ -338,14 +338,27 @@ export function createServer(options = {}) {
     if (!set.size) sessionWaiters.delete(id);
     if (!w.done) { clearTimeout(w.timer); waitersByIp.set(w.ip, (waitersByIp.get(w.ip) || 1) - 1); }
   };
-  // Holds a session long poll; respond() re-reads the row and sends 200/204/404. Per-id and
-  // per-IP caps are shared with legacy waiters.
-  const holdSessionWaiter = (req, res, id, waitS, respond) => {
+  // Answer collection takes priority over passive view updates without increasing either
+  // cap. End one same-session view poll early when necessary; it rechecks state normally.
+  // The operation is chosen by the handler, never a caller-supplied role/header. Existing
+  // public encrypted reads and hosted capability authentication keep their original rules.
+  const holdSessionWaiter = (req, res, id, waitS, respond, kind = "view") => {
     const ip = clientIp(req);
-    const total = (waiters.get(id)?.size || 0) + (sessionWaiters.get(id)?.size || 0);
-    if (total >= waitersPerGrill || (!req[HOSTED] && (waitersByIp.get(ip) || 0) >= waitersPerIp))
+    const total = () => (waiters.get(id)?.size || 0) + (sessionWaiters.get(id)?.size || 0);
+    const ipFull = () => !req[HOSTED] && (waitersByIp.get(ip) || 0) >= waitersPerIp;
+    if (kind === "answers" && waitersPerGrill > 0 && (total() >= waitersPerGrill || ipFull())) {
+      // If the incoming IP itself is full, only a victim from that same IP can free
+      // its capacity. Never displace another answer collector or another interview.
+      const victim = [...(sessionWaiters.get(id) || [])].find(w => w.kind === "view" && (!ipFull() || w.ip === ip));
+      if (victim) {
+        dropSessionWaiter(id, victim); victim.done = true; victim.respond();
+        // Re-evaluating the released poll may have observed expiry and ended the row.
+        if (!liveSession(id)) return respond();
+      }
+    }
+    if (total() >= waitersPerGrill || ipFull())
       return sendJson(res, 429, { error: "too many waiting requests" });
-    const w = { res, ip, done: false, respond };
+    const w = { res, ip, kind, done: false, respond };
     // On timeout, re-evaluate instead of answering blind: an expired session is 404 gone
     // immediately, without waiting for the sweeper.
     w.timer = setTimeout(() => { dropSessionWaiter(id, w); w.done = true; w.respond(); }, waitS * 1000);
@@ -841,7 +854,7 @@ export function createServer(options = {}) {
       if (cur.state === "answered")
         return sendJson(res, 200, { round: cur.round, revision: cur.revision, submissionId: cur.sub_id, ct: cur.ans_ct, iv: cur.ans_iv });
       return sendEmpty(res, 204);
-    });
+    }, "answers");
   };
 
   const postAck = async (req, res, id, roundRaw) => {
