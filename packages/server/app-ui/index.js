@@ -8,6 +8,8 @@ const $ = id => document.getElementById(id);
 let ids, link, started = false, alive = true, generation = 0, revision = -1, round = 0;
 let ui, grill, draft, intent, confirmed = false, notice, notifyingNotice, retryAction;
 let pollController;
+const cardPointers = new Set();
+let cardClickPending = false;
 let lostRound = 0; // current-only loss notice; never misrepresent another winner as ours
 function retire() {
   try { ui?.destroy(); } catch {} ui = null;
@@ -138,8 +140,13 @@ const positive = value => Number.isFinite(value) && value > 0;
 function compactLayout() {
   const host = $("app-host"), style = getComputedStyle(host);
   const small = !$("cards").hidden && host.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) < 350;
-  host.classList.toggle("compact", small); $("compact").hidden = !small;
-  if (!small) { $("compact-title").textContent = $("compact-copy").textContent = ""; return; }
+  // Focus can move from textarea to Next before its native click. Keep the whole
+  // card interaction alive through pointerup/click, not only the editable itself.
+  const editing = cardClickPending || cardPointers.size > 0 || (document.hasFocus() && $("cards").contains(document.activeElement));
+  const compact = small && !editing;
+  host.classList.toggle("editing-small", small && editing);
+  host.classList.toggle("compact", compact); $("compact").hidden = !compact;
+  if (!compact) { $("compact-title").textContent = $("compact-copy").textContent = ""; return; }
   const question = draft && draft.pos >= draft.order.length ? null : grill?.questions[draft?.order?.[draft.pos] ?? 0];
   $("compact-title").textContent = `Round ${round} · ${question?.title ?? "Answers ready"}`;
   $("compact-copy").textContent = !$("expand").hidden
@@ -184,6 +191,22 @@ app.onhostcontextchanged = update => dimensions(update);
 // A fixed allocation notification can precede the iframe's actual viewport resize.
 // Re-measure only the compact fallback; do not send another sizing hint.
 window.addEventListener("resize", compactLayout);
+window.addEventListener("blur", () => { cardPointers.clear(); cardClickPending = false; compactLayout(); });
+document.addEventListener("focusin", compactLayout);
+document.addEventListener("focusout", () => queueMicrotask(compactLayout));
+document.addEventListener("pointerdown", event => {
+  if (!$("cards").contains(event.target)) return;
+  cardPointers.add(event.pointerId);
+  if (event.target.closest("button, a, input, textarea, summary")) cardClickPending = true;
+}, true);
+for (const type of ["pointerup", "pointercancel"]) document.addEventListener(type, event => {
+  cardPointers.delete(event.pointerId);
+  if (type === "pointercancel" || !$("cards").contains(event.target) || !event.target.closest("button, a, input, textarea, summary")) cardClickPending = false;
+  compactLayout();
+}, true);
+// Touch's compatibility click may arrive in a later task than pointerup/focusout.
+// Release only after that click has reached the card control, without refocusing.
+document.addEventListener("click", () => setTimeout(() => { cardClickPending = false; compactLayout(); }, 0), true);
 app.ontoolresult = result => {
   // Ignore input/partial notifications entirely. A valid COMPLETED render result is
   // the sole capability handoff. Re-delivery must not reset this view's current draft.

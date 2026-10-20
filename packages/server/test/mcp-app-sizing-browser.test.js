@@ -105,9 +105,52 @@ test("official AppBridge sizing: soft ceiling, fixed350, fullscreen safe insets 
   await frame.waitForFunction(() => document.documentElement.style.getPropertyValue('--host-height') === '844px');
   const full = await measure("fullscreen844-insets24-12-96-12");
   await capture('fullscreen-safe-insets');
+  await frame.evaluate(() => {
+    window.focusTrace = [];
+    for (const type of ['focusin', 'focusout', 'resize', 'pointerdown', 'pointerup', 'click']) window.addEventListener(type, event => window.focusTrace.push({ type, trusted: event.isTrusted, target: event.target.tagName, active: document.activeElement.tagName, viewport: innerHeight, compact: document.getElementById('app-host').classList.contains('compact') }), true);
+  });
+  const editable = await frame.locator('textarea').elementHandle();
+  await frame.locator('textarea').click();
+  await page.setViewportSize({ width: 390, height: 350 });
+  await page.evaluate(() => window.test.update({ containerDimensions: { height: 350, width: 390 } }, 350));
+  const keyboard = await measure('fullscreen-keyboardlike350');
+  const focusedAfterShrink = await editable.evaluate(node => node === document.activeElement && node === document.querySelector('textarea'));
+  if (focusedAfterShrink) {
+    await page.keyboard.type('x'); await page.keyboard.press('Backspace');
+    await page.evaluate(() => window.test.feedback());
+  }
+  const focusedAfterTyping = await editable.evaluate(node => node === document.activeElement && node === document.querySelector('textarea'));
+  const focusTrace = await frame.evaluate(() => window.focusTrace);
+  t.diagnostic(JSON.stringify({ focusedAfterShrink, focusTrace, keyboard }));
+  await capture('keyboardlike350');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => window.test.update({ containerDimensions: { height: 844, width: 390 } }, 844));
   await page.evaluate(() => window.test.returnInline()); const returned = await measure("mode-only-return-inline");
   await page.evaluate(() => window.test.update({ theme: 'dark' }));
   assert.equal((await measure("partial-theme-no-resize")).requests.length, returned.requests.length);
+  await page.setViewportSize({ width: 390, height: 350 });
+  await page.evaluate(() => window.test.update({ containerDimensions: { height: 350, width: 390 } }, 350));
+  await settle();
+  const inlineFocused = await editable.evaluate(node => node === document.activeElement && node === document.querySelector('textarea'));
+  if (inlineFocused) { await page.keyboard.type('x'); await page.keyboard.press('Backspace'); }
+  await page.evaluate(() => window.test.update({ displayMode: 'fullscreen', containerDimensions: { height: 350, width: 390 }, safeAreaInsets: { top: 24, right: 12, bottom: 96, left: 12 } }, 350));
+  await settle();
+  const nextBox = await frame.locator('.gm-row button:last-child').boundingBox();
+  const finger = await page.context().newCDPSession(page);
+  await finger.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: nextBox.x + nextBox.width / 2, y: nextBox.y + nextBox.height / 2 }] });
+  await finger.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await finger.detach();
+  try { await frame.waitForFunction(() => document.querySelector('.gm-progress')?.textContent === '1/1 answered', null, { timeout: 2000 }); }
+  catch (error) { t.diagnostic(JSON.stringify({ failedNext: await frame.evaluate(() => ({ trace: window.focusTrace, progress: document.querySelector('.gm-progress')?.textContent, compact: document.getElementById('app-host').className })) })); throw error; }
+  assert.match(await frame.locator('.gm-a').textContent(), /Draft survives mode changes/);
+  assert.ok(await frame.evaluate(() => window.focusTrace.some(event => event.type === 'click' && event.target === 'BUTTON' && event.trusted)), 'real touch delivered the native Next click');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('body').click({ position: { x: 1, y: 800 } }); // deliberate host-side blur, not an app refocus
+  await page.evaluate(() => window.test.update({ displayMode: 'inline', containerDimensions: { height: 150, width: 390 }, safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 } }, 150));
+  await frame.locator('#compact').waitFor({ timeout: 2000 });
+  assert.equal(await originalMount.evaluate(node => node === document.getElementById('grill-root')), true);
+  assert.match(await frame.locator('#compact-title').textContent(), /Answers ready/);
+  t.diagnostic(JSON.stringify({ inlineFocused, trustedNextTapCommitted: true, explicitMinimizeCompact: true, finalFocusTrace: await frame.evaluate(() => window.focusTrace) }));
   t.diagnostic(JSON.stringify({ scope: "Controlled official AppBridge only, not actual ChatGPT chrome", measurements, errors }));
   if (process.env.GRILL_ME_APPS_SIZING_EVIDENCE) {
     const out = process.env.GRILL_ME_APPS_SIZING_EVIDENCE; await fs.mkdir(out, { recursive: true });
@@ -127,4 +170,9 @@ test("official AppBridge sizing: soft ceiling, fixed350, fullscreen safe insets 
   assert.equal(returned.frameHeight, 480, "mode-only return requests saved compact inline size despite prior identical hint");
   assert.equal(returned.host.height, 480); assert.ok(returned.documentHeight <= 844);
   assert.deepEqual(errors, []);
+  assert.equal(focusedAfterShrink, true, 'keyboardlike shrink preserves the actual editable node and focus');
+  assert.equal(focusedAfterTyping, true, 'repeated onChange and host updates cannot hide the active editor');
+  assert.equal(inlineFocused, true, 'inline keyboardlike shrink uses the same editing protection');
+  assert.ok(focusTrace.every(event => event.type !== 'focusout'), 'no app-induced blur during the fullscreen keyboardlike transition');
+  assert.ok(keyboard.input.bottom <= keyboard.next.top && keyboard.next.bottom <= keyboard.card.bottom && keyboard.next.bottom < keyboard.bar.top, 'keyboard-sized editor retains reachable controls');
 });

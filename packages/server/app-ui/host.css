@@ -11,6 +11,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: n
 #cards { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 #grill-root { flex: 1; min-height: 0; }
 #app-host.compact #cards { display: none; }
+/* A keyboard-sized allocation must not hide the focused editor. Keep its form and
+   controls in the existing card; only reduce host-specific spare vertical padding. */
+#app-host.editing-small .gm-stage { padding-block: 4px; }
+#app-host.editing-small .gm-scroll { padding-block: 0; }
+#app-host.editing-small .gm-text { padding-block: 4px; }
 #compact { flex: 1; min-height: 0; overflow: auto; padding: 10px 16px; text-align: center; overflow-wrap: anywhere; }
 #compact-title { display: block; }
 #compact-copy { margin: 5px 0 0; color: var(--muted); }

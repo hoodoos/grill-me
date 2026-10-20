@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ImplementationSchema } from "@modelcontextprotocol/core";
@@ -42,10 +43,19 @@ test("hosted legacy/modern metadata conforms to published SDK and icon is unauth
   const upstream = await fs.readFile(path.join(root, "packages/core/src/grilling.md"), "utf8");
   assert.ok(init.instructions.includes(upstream)); assert.ok(discover.instructions.includes(upstream));
   const iconURL = new URL(init.serverInfo.icons[0].src);
-  assert.equal(iconURL.href, "https://grill-me.ai/grill-me-game.svg");
-  const icon = await fetch(base + iconURL.pathname);
+  assert.equal(iconURL.href, "https://grill-me.ai/grill-me-game.svg?v=a27362e00dce");
+  const icon = await fetch(base + iconURL.pathname + iconURL.search);
   assert.equal(icon.status, 200); assert.match(icon.headers.get("content-type"), /^image\/svg\+xml/);
-  assert.equal(await icon.text(), await fs.readFile(path.join(packageRoot, "assets/logo.svg"), "utf8"));
+  const svg = Buffer.from(await icon.arrayBuffer());
+  assert.equal(svg.length, 782);
+  assert.equal(createHash("sha256").update(svg).digest("hex"), "a27362e00dcee39a85c5137feefadc8737440786ef9e52863de673d12d00e60a");
+  assert.deepEqual(svg, await fs.readFile(path.join(packageRoot, "assets/logo.svg")));
+  const favicon = await fetch(base + "/favicon.svg?v=a27362e00dce");
+  assert.equal(favicon.status, 200); assert.match(favicon.headers.get("content-type"), /^image\/svg\+xml/);
+  assert.deepEqual(Buffer.from(await favicon.arrayBuffer()), svg);
+  for (const html of ["index.html", "grill.html", "hub.html"]) {
+    assert.match(await fs.readFile(path.join(root, "packages/server/public", html), "utf8"), /href="\/favicon\.svg\?v=a27362e00dce"/);
+  }
 });
 
 test("portable hosted listing has bounded copy, canonical no-credential transport and safe included assets", async () => {
