@@ -133,3 +133,51 @@ test("hosted presentation branches keep inline questions in cards and phone-only
   assert.doesNotMatch(next.content[0].text, /PRIVATE_FRONTIER_|Show the complete questions/);
   await call("grill_cancel", { link });
 });
+
+test("resume checks answers before resending: timeout retains pending, saved answers replay until ACK, expiry needs fresh link", async t => {
+  let clock = Date.now();
+  const srv = createServer({ db: ':memory:', now: () => clock, sweepMs: 20, log: () => {} });
+  await new Promise(r => srv.server.listen(0, '127.0.0.1', r));
+  t.after(async () => { srv.server.closeAllConnections(); await srv.close(); });
+  const base = `http://127.0.0.1:${srv.server.address().port}`;
+  let sequence = 0;
+  const rpc = async (method, params = {}) => {
+    const response = await fetch(base + '/mcp', { method: 'POST', headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++sequence, method, params }) });
+    const raw = await response.text();
+    const result = JSON.parse(raw.startsWith(':') ? raw.split('\n').find(l => l.startsWith('data: ')).slice(6) : raw).result;
+    assert.ok(!result.isError, result.content?.[0]?.text); return result;
+  };
+  const call = async (name, args = {}) => (await rpc('tools/call', { name, arguments: args })).structuredContent;
+  const { link } = await call('grill_start');
+  const ready = await call('grill_send', { link, round: 1, expectedRevision: 0, grill });
+  assert.equal(ready.waitSeconds, 45); assert.equal(ready.maxWaitSeconds, 50);
+  assert.match(ready.timeoutHelp, /45 seconds per call/);
+  assert.match(ready.timeoutHelp, /no active answer-wait tool/);
+  const before = (await call('grill_ui_state', { link })).snapshot;
+  const timeout = await call('grill_wait', { link, round: 1, seconds: 1 });
+  assert.equal(timeout.status, 'WAITING'); assert.equal(timeout.waitSeconds, 1);
+  assert.match(timeout.message, /1 second per call/); assert.match(timeout.message, /Resume Grill Me/);
+  const after = (await call('grill_ui_state', { link })).snapshot;
+  assert.equal(after.revision, before.revision); assert.equal(after.expiresAt, before.expiresAt);
+  assert.equal(after.ct, before.ct); assert.equal(after.state, 'pending');
+  const ids = parseSessionLink(link);
+  await call('grill_ui_submit', { link, round: 1, expectedRevision: 1, submissionId: newId(), ...await sealRoundAnswers({ v: 1, answers: [{ n: 1, kind: 'agree' }] }, grill, { ...ids, round: 1 }) });
+  // The resume recipe is an actual bounded read, not a resend or implicit ACK.
+  const recovered = await call('grill_wait', { link, round: 1, seconds: 1 });
+  assert.equal(recovered.status, 'ANSWERS'); assert.equal(recovered.answers, 'Q1 - agree');
+  assert.equal((await call('grill_ui_state', { link })).snapshot.state, 'answered');
+  const replay = await call('grill_wait', { link, round: 1, seconds: 1 });
+  assert.deepEqual(replay.receipt, recovered.receipt);
+  const ack = await call('grill_ack', { link, receipt: recovered.receipt });
+  assert.equal(ack.state, 'idle');
+  await call('grill_send', { link, round: 2, expectedRevision: ack.revision, grill });
+  clock += 3_600_001;
+  const expired = await call('grill_wait', { link, round: 2, seconds: 1 });
+  assert.equal(expired.status, 'ENDED'); assert.equal(expired.reason, 'expired');
+  assert.match(expired.recovery, /fresh session/);
+  assert.equal((await call('grill_send', { link, round: 2, expectedRevision: ack.revision, grill })).status, 'ENDED', 'resume never revives old id');
+  const fresh = await call('grill_start');
+  assert.notEqual(fresh.link, link);
+  assert.equal((await call('grill_send', { link: fresh.link, round: 1, expectedRevision: 0, grill })).status, 'READY');
+  await call('grill_cancel', { link: fresh.link });
+});

@@ -2,6 +2,7 @@
 // HTTP server (milestone 4b). Browser-safe like the rest of core. The transport keeps one ctx per
 // connection; ctx carries clientInfo (from initialize) and an AbortSignal signal per call.
 import { GRILL_SCHEMA } from "./format.js";
+import { RESUME_HELP } from "./recovery.js";
 
 export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"]; // newest first
 
@@ -103,7 +104,7 @@ export function grillToolDefs({ mode, waitSeconds }) {
   const send = {
     name: "grill_send",
     title: "Send a grill",
-    description: SEND_DESCRIPTION,
+    description: SEND_DESCRIPTION + " Before waiting show its actual configured limit and: " + RESUME_HELP,
     inputSchema: {
       type: "object",
       properties: {
@@ -147,7 +148,7 @@ export function grillToolDefs({ mode, waitSeconds }) {
     description:
       "Wait up to seconds for the user to answer on their phone. On WAITING, call again with the same " +
       "arguments. On ANSWERS, the answer lines follow ('Q<n> - …'). EXPIRED means the grill is gone — offer to " +
-      "send it again with grill_send." +
+      "send it again with grill_send. " + RESUME_HELP +
       (hosted
         ? ""
         : " OFFLINE means grill-me.ai can't be reached; the answers stay on the server for an hour. " +

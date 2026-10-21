@@ -161,7 +161,8 @@ GCM tag). Preflight checks use UTF8 JSON bytes, preserve all text and selections
 user to shorten an oversized answer before any POST. Copy answers remains available on the phone.
 
 Only current session key, currentround/grill/unconfirmed draft and exact encrypted outgoing submission
-intent are retained locally under session+round identity, not contentHash. Identical questions in a
+intent, plus the current encrypted question blob for explicit Copy answers after submission,
+are retained locally under session+round identity, not contentHash. Identical questions in a
 later round start unanswered. Key survives reload during a live session;3day expiry bounds abandoned
 local state. Current offline unconfirmed draft remains usable, including Copy answers.
 
@@ -208,3 +209,6 @@ API-offline reload/draft recovery, immutable outgoing retry, a losing device's c
 same-browser stale tab callbacks, delayed actual WebCrypto/gesture callbacks, and finish/cancel purge.
 The 350px viewport is simulated resizing, not physical software-keyboard evidence. Reload retains
 an unconfirmed own-answer draft; reopen the own-answer form to continue editing it.
+
+See [Timeouts and resuming an interview](RECOVERY.md) for the explicit wait budgets, resume
+recipe and current-only recovery copy policy; no server retention extension is introduced.

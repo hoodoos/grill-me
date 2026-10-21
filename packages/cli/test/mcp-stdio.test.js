@@ -317,3 +317,23 @@ for (const fault of ["stalled DELETE headers", "committed lost reply", "committe
     assert.ok(fake.requests().slice(before).every((r) => r.method === "DELETE"), "replay needs no GET, and confirmed 404 can clear pending");
   });
 }
+
+test('configured wait limit is visible before waiting; short timeout supplies the same resume command and keeps identity', async t => {
+  const { mcp } = await fixture(t, { env: { GRILL_ME_WAIT_SECONDS: '840' } });
+  const init = await mcp.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'Codex', version: '1' } });
+  assert.match(init.result.instructions, /14 minutes per call/);
+  assert.match(init.result.instructions, /Resume Grill Me/);
+  const sent = await mcp.request('tools/call', { name: 'grill_send', arguments: { text: DEMO_TEXT } });
+  assert.equal(sent.result.structuredContent.waitSeconds, 840);
+  assert.equal(sent.result.structuredContent.maxWaitSeconds, 840);
+  assert.match(sent.result.content[0].text, /14 minutes per call/);
+  const id = sent.result.structuredContent.id;
+  const waiting = await mcp.request('tools/call', { name: 'grill_wait', arguments: { id, seconds: 1 } });
+  assert.equal(waiting.result.structuredContent.status, 'WAITING');
+  assert.equal(waiting.result.structuredContent.waitSeconds, 1);
+  assert.match(waiting.result.content[0].text, /1 second per call/);
+  assert.match(waiting.result.content[0].text, /does not expire/);
+  assert.match(waiting.result.content[0].text, /Resume Grill Me/);
+  const cancelled = await mcp.request('tools/call', { name: 'grill_cancel', arguments: { id } });
+  assert.equal(cancelled.result.structuredContent.status, 'CANCELLED');
+});

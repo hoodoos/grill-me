@@ -28,8 +28,9 @@ App tools:
 
 The view uses the official MCP Apps SDK2.0.3 and host bridge exclusively: no direct API,
 CDN, nested iframe, arbitrary network or persistent browser history. Current plaintext,
-draft and capability are memory-only in this open view, purged on confirmed submission,
-advance and terminal state; re-opening can recover the current encrypted round, but an
+draft and capability are memory-only in this open view. The current recovery copy stays
+until collection, advance or explicit end; on expiry it is available only in this still-open
+view. Submitted draft state is purged on confirmed submission, advance and terminal state; re-opening can recover the current encrypted round, but an
 unsubmitted draft does not survive destruction of the iframe. Same-revision snapshots
 preserve the draft, and asynchronous work is generation-guarded with retired mount nodes.
 The exact sealed submission intent is retained for uncertain POST retries, never resealed.
@@ -53,7 +54,7 @@ After rendering the first inline view, the agent ends its turn instead of blocki
 `grill_wait`. A submitted-answers UI follow-up gets one `grill_wait({seconds:1})` read;
 after read/retain/ACK and the next publish it yields again, keeping the same view.
 For an actually rendered inline view, the questions/recommendations stay in the cards;
-the only chat copy is `Grill it on your phone: <same link>`. Do not duplicate the frontier
+chat copy is the `Grill it on your phone: <same link>` line and one short timeout/resume hint, without repeating questions. Do not duplicate the frontier
 above or below the cards. Phone-only presentation keeps the full frontier in chat, in
 Matt's original format, followed by that same link. The original skill body is unchanged;
 this separate transport rule selects where its round is presented. Local CLI/stdio
@@ -108,3 +109,9 @@ It is set atomically with answer CAS and cleared by ACK/advance/deletion. Catch-
 unsubscribe/resubscribe uses that same occurrence time, so stable event ID means stable
 body. A migrated already-answered row without a recorded time gets one first-observed
 timestamp, never a round history or additional ciphertext/plaintext retention.
+
+## Wait limits and manual recovery
+
+See [Timeouts and resuming an interview](RECOVERY.md) for the actual per-integration budgets,
+`Resume Grill Me` recipe, widget resume/fallback actions and current-only Copy answers retention.
+Explicit resume may reopen a closed/unusable view; routine round continuation keeps the same view.

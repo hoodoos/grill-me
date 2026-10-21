@@ -5,6 +5,8 @@ import { send, wait, check, resend, cancel, finish, sendRound } from "./index.js
 import { isId } from "../../core/src/index.js";
 import { writeOutput } from "./output.js";
 
+import { RESUME_HELP, EXPIRY_HELP } from "../../core/src/recovery.js";
+
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
 const HELP = `grill-me — your agent's questions as swipe cards on your phone
@@ -82,6 +84,8 @@ function printSend(out, result) {
     out("");
     out(`id: ${result.id}`);
     out(`round: ${result.round}`);
+    out("Background CLI wait has no fixed total timeout; it uses up to 50-second network polls. Your agent host may stop its task earlier. " + RESUME_HELP);
+    out(EXPIRY_HELP);
     out("STATUS: PUBLISHING");
     return;
   }
@@ -97,6 +101,8 @@ function printSend(out, result) {
     out("");
     out(`id: ${result.id}`);
     out(`round: ${result.round}`);
+    out("Background CLI wait has no fixed total timeout; it uses up to 50-second network polls. Your agent host may stop its task earlier. " + RESUME_HELP);
+    out(EXPIRY_HELP);
     return;
   }
   out(`Grill Me: ${result.count} question${result.count === 1 ? "" : "s"}, answer within ${withinPhrase(result.expiresAt)}.`);
@@ -206,6 +212,7 @@ async function run(argv, { stdout, stderr, stdin } = {}) {
             out(result.message ?? "The local record and the session disagree; re-check with fetch.");
             break;
         }
+        if (["WAITING", "EXPIRED", "OFFLINE"].includes(result.status)) out(RESUME_HELP + ` Check saved answers first with: npx -y grill-me-ai fetch ${id}`);
         out(`STATUS: ${result.status}`);
         return 0;
       }
