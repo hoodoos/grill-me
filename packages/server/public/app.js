@@ -5,9 +5,9 @@
 // #screen-done (after sending).
 import {
   openGrill, sealAnswers, deriveKeys, contentHash, answerLines,
-  convert, DEMO_TEXT, isId, isSecret,
+  convert, DEMO_TEXT, isId, isSecret, LIMITS,
 } from "/core/index.js";
-import { mountGrill } from "/ui/grill.js";
+import { mountGrill } from "/ui/grill.js?v=answer-fixes-1";
 
 const $ = (id) => document.getElementById(id);
 const KEEP_MS = 3 * 86400000; // local copies expire after 3 days
@@ -198,6 +198,7 @@ async function runGrill(id) {
     show("screen-grill");
     grillUi = mountGrill($("grill-root"), {
       grill: g,
+      answerLimits: { ownChars: LIMITS.ownChars, jsonBytes: LIMITS.answersBytes - 16 }, // AES-GCM tag
       saved: snap,
       note,
       onChange: async (s) => {

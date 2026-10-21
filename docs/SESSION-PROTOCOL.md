@@ -39,6 +39,14 @@ End receipts need no key, so key/plaintext purge is preserved while reload/recon
 tabs can still recover the authoritative message. No offline remote-erasure promise is made.
 Aggregated daily metrics are allowed, never per-session history. Existing rate/wait/IP caps apply jointly
 to legacy and session traffic, including phone update polls and agent answer polls.
+Answer-collection waits take priority over passive session-update polls: at capacity, the
+relay ends one same-interview view poll early and admits the answer wait within the existing
+per-interview and per-IP caps. It never displaces an answer wait or another interview.
+This is operation priority, not caller identity inferred from a header. Existing public
+encrypted-read and hosted capability-authentication rules remain unchanged. A phone whose
+held poll is rate-limited keeps its draft and checks revisions without waiting every1–1.3s,
+then retries long polling after10s. Ready answers remain immediately readable regardless
+of held-poll capacity; no retry acknowledges them.
 
 ## Crypto (new module, legacy unchanged)
 
@@ -139,10 +147,18 @@ CLI polling remains supported. Output does not block on cleanup; next send resol
 ## Browser state / transport cache / UI
 
 Use a unique new entry module `/entry-020.js`: dispatch `?session=2` to new `/session-app.js`; legacy
-routes import unchanged `/app.js`. HTML points to the new entry path. New session app imports the new
+routes import the compatible one-shot `/app.js` adapter. HTML points to the new entry path. New session app imports the new
 `/core/session.js` directly, avoiding cached0.1 `/app.js`/coreindex. Entry query alone is insufficient to
 invalidate relative imports. Require warm0.1 cache ->0.2 in SAME browser context with no cacheclear/hardreload.
-No CSS/gesture changes: use existing mountGrill and hard viewport/touch styling unchanged.
+Card geometry, CSS and gesture thresholds remain unchanged. Answer-correctness fixes now bind
+each delayed swipe to its original card, briefly lock overlapping answer actions during commit,
+and cancel gesture/focus timers on destroy. Partial multi-choice selections are part of the
+current-round draft and are restored when editing an existing answer. Changed shared UI/state,
+legacy adapter and session-entry URLs are versioned together to avoid warm stale modules.
+Phone and embedded hosts supply the wire budget to the shared UI: no more than4000characters
+per own answer, and8192bytes for the complete encrypted answer object (including its16byte
+GCM tag). Preflight checks use UTF8 JSON bytes, preserve all text and selections, and ask the
+user to shorten an oversized answer before any POST. Copy answers remains available on the phone.
 
 Only current session key, currentround/grill/unconfirmed draft and exact encrypted outgoing submission
 intent are retained locally under session+round identity, not contentHash. Identical questions in a

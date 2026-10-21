@@ -8,9 +8,8 @@
 //
 // Generation guards sit after every asynchronous boundary (fetch/decrypt and the swipe UI's
 // onChange): when a transition bumps the generation, stale round-N work can neither render nor
-// recreate storage. mountGrill.destroy() does not cancel the card's in-flight 200 ms swipe-commit
-// timer and an old render can repopulate the same root node, so every transition retires the
-// actual mount DOM node (a fresh same-id replacement): the old timer then renders a detached node.
+// recreate storage. Destroy also cancels UI gesture/focus timers; replacing the actual mount
+// DOM node provides a second boundary against retired nodes and asynchronous host callbacks.
 //
 // Delivery is only ever claimed from a POST the relay authenticated: a 204 (winner) or 200 (the
 // relay already holds this exact submission, digest-checked). A poll snapshot whose submissionId
@@ -21,7 +20,8 @@ import {
 } from "/core/session.js"; // direct import: never the cached 0.1 /core/index.js
 import { answerLines } from "/core/answers.js"; // legacy module, byte-unchanged since 0.1
 import { b64urlEncode } from "/core/crypto.js"; // legacy module, byte-unchanged since 0.1
-import { mountGrill } from "/ui/grill.js";
+import { LIMITS } from "/core/format.js";
+import { mountGrill } from "/ui/grill.js?v=answer-fixes-1";
 
 const $ = (id) => document.getElementById(id);
 const KEEP_MS = 3 * 86400000; // abandoned local state expires after 3 days
@@ -244,6 +244,7 @@ function mountRound(grill, round, snap, note) {
   show("screen-grill");
   grillUi = mountGrill($("grill-root"), {
     grill,
+    answerLimits: { ownChars: LIMITS.ownChars, jsonBytes: LIMITS.answersBytes - 16 }, // AES-GCM tag
     saved: snap,
     note,
     onChange: (s) => {
@@ -493,6 +494,7 @@ async function syncOnce() {
 
 async function pollLoop() {
   let failures = 0;
+  let capacityUntil = 0; // bounded short polling when an answer collector needs our held slot
   while (alive) {
     if (!navigator.onLine) { pauseThinking(); failures = Math.max(failures, 1); await untilEvent(window, "online"); continue; }
     if (document.visibilityState !== "visible") {
@@ -503,9 +505,18 @@ async function pollLoop() {
     try {
       const ac = new AbortController();
       pollAbort = ac;
-      const query = refreshPoll || failures ? "wait=0" : `after=${revision}&wait=${POLL_WAIT_S}`;
+      const query = refreshPoll || failures ? "wait=0"
+        : `after=${revision}&wait=${performance.now() < capacityUntil ? 0 : POLL_WAIT_S}`;
       refreshPoll = false;
       r = await fetchBounded(`/api/s/${id}?${query}`, { signal: ac.signal }, POLL_BOUND_MS);
+      if (r.status === 429) {
+        pollAbort = null;
+        // The connection is healthy: keep the current draft/thinking state and read
+        // updates without holding a slot. Probe long polling again after ten seconds.
+        capacityUntil = performance.now() + 10_000;
+        await sleep(1000 + Math.floor(Math.random() * 300));
+        continue;
+      }
       if (r.status === 200) snap = await r.json();
       else if (r.status === 404) reason = await terminalReason(r);
       else if (r.status !== 204 && r.status !== 404) throw new Error(`HTTP ${r.status}`);
@@ -527,7 +538,7 @@ async function pollLoop() {
     } else if (r.status === 204 && awaitingNext && !$("screen-message").classList.contains("session-thinking")) {
       waiting(); // a successful unchanged poll confirms the idle state after reconnect
     }
-    if (alive) await sleep(150);
+    if (alive) await sleep(performance.now() < capacityUntil ? 1000 + Math.floor(Math.random() * 300) : 150);
   }
 }
 
