@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import { createMcpHandler, grillToolDefs, clientAgent } from "../../core/src/index.js";
 import { send, sendRound, wait, cancel, finish } from "./index.js";
 import { writeOutput } from "./output.js";
+import { EXPIRY_HELP, RESUME_HELP, RESUME_WORKFLOW, waitHelp } from "../../core/src/recovery.js";
 
 const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -24,7 +25,7 @@ const INSTRUCTIONS =
   "id/round/questions rather than creating another session or claiming the phone is ready. " +
   "Then call grill_wait with the id. After shared-understanding confirmation call grill_finish. " +
   "If the user answers in chat instead, call grill_cancel.\n\n" +
-  "Matt Pocock’s complete grilling skill (MIT):\n\n" + GRILLING;
+  "Matt Pocock’s complete grilling skill (MIT):\n\n" + GRILLING + "\n\n" + RESUME_WORKFLOW;
 
 // GRILL_ME_WAIT_SECONDS is both the default and, when set, the cap: each client sets it to fit
 // its tool time limit (Desktop 180 < 240 s, Codex 840 < 900), so a larger `seconds` must not
@@ -44,16 +45,16 @@ const waitSeconds = (arg, { default: def, max }) => {
 };
 
 const STATUS_TEXT = {
-  EXPIRED: "The grill expired before it was answered. Offer to send the questions again with grill_send.",
+  EXPIRED: "This interview ended or expired. Check this chat for explicit finish/cancel before resending only its last unanswered frontier on a fresh link. " + RESUME_HELP,
   OFFLINE: "Couldn't reach grill-me.ai for 5 minutes. The answers stay on the server for up to an hour; call grill_wait again to check.",
-  WAITING: "No answers yet. Call grill_wait again with the same arguments to keep waiting.",
+  WAITING: "No answers yet. This wait ended; the interview may still be live. Continue bounded waits only while this host turn is active.",
 };
 
-const waitResult = (result) => ({
+const waitResult = (result, seconds) => ({
   text: result.status === "ANSWERS"
     ? `${result.lines}\nSTATUS: ANSWERS`
-    : `${result.message ?? STATUS_TEXT[result.status] ?? result.status}\nSTATUS: ${result.status}`,
-  structured: { status: result.status, ...(result.lines ? { answers: result.lines } : {}),
+    : `${result.message ?? STATUS_TEXT[result.status] ?? result.status}${seconds ? "\n" + waitHelp(seconds) : ""}\nSTATUS: ${result.status}`,
+  structured: { status: result.status, ...(seconds && result.status !== "ANSWERS" ? { waitSeconds: seconds, resumeCommand: "Resume Grill Me" } : {}), ...(result.lines ? { answers: result.lines } : {}),
     ...Object.fromEntries(["session", "id", "round", "revision", "state", "submissionId", "link"].filter(k => result[k] !== undefined).map(k => [k, result[k]])) },
 });
 
@@ -84,8 +85,8 @@ function localTools(env) {
         text:
           `Show the complete frontier round in Matt Pocock’s exact grilling format, then end your reply with:\n\n` +
           `Grill it on your phone\n${result.link}\n\n` +
-          `Then call grill_wait with id "${result.id}".`,
-        structured: Object.fromEntries(Object.entries(result).filter(([key]) => key !== "qr")),
+          `${waitHelp(waitCfg.default)} ${EXPIRY_HELP}\nShow this wait limit and resume instruction to the user BEFORE waiting. Then call grill_wait with id "${result.id}".`,
+        structured: { ...Object.fromEntries(Object.entries(result).filter(([key]) => key !== "qr")), waitSeconds: waitCfg.default, maxWaitSeconds: waitCfg.max, resumeCommand: "Resume Grill Me" },
       };
     },
 
@@ -98,7 +99,7 @@ function localTools(env) {
         signal: ctx.signal,
       });
       if (result.status === "ANSWERS") ctx.onDelivery(result);
-      return waitResult(result);
+      return waitResult(result, seconds);
     },
 
     grill_cancel: async (args, ctx) => {
@@ -116,7 +117,7 @@ function localTools(env) {
 
 // Starts the server; resolves when stdin closes. Diagnostics (never arguments or results) to stderr.
 export function startStdioServer({ stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env } = {}) {
-  const handler = createMcpHandler({ name: "grill-me", version: pkg.version, instructions: INSTRUCTIONS, tools: localTools(env) });
+  const handler = createMcpHandler({ name: "grill-me", version: pkg.version, instructions: INSTRUCTIONS + "\n\n" + waitHelp(waitConfig(env).default) + " " + EXPIRY_HELP + " Show the actual selected wait limit before waiting; host timeouts may end a call earlier.", tools: localTools(env) });
   const conn = { clientInfo: undefined };
   const controllers = new Map(); // request id → AbortController
   const write = (obj, signal) => writeOutput(stdout, JSON.stringify(obj) + "\n", signal);

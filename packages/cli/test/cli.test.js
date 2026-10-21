@@ -116,7 +116,10 @@ test("fetch → WAITING, then wait → ANSWERS with the exact status line", asyn
 
   const waiting = await run(["fetch", id], { home, server });
   assert.equal(waiting.code, 0, waiting.stderr);
-  assert.equal(waiting.stdout, `No answers yet.\nSTATUS: WAITING\n`);
+  assert.ok(waiting.stdout.startsWith("No answers yet.\n"));
+  assert.match(waiting.stdout, /Resume Grill Me/);
+  assert.ok(waiting.stdout.includes(`fetch ${id}`));
+  assert.ok(waiting.stdout.endsWith("STATUS: WAITING\n"));
 
   const answering = sleep(250).then(() =>
     phoneAnswer(server, id, pending.secret, [
@@ -145,10 +148,9 @@ test("expired grill → EXPIRED with the resend hint, then resend and cancel", a
 
   const expired = await run(["wait", id], { home, server });
   assert.equal(expired.code, 0, expired.stderr);
-  assert.equal(
-    expired.stdout,
-    `The grill expired before it was answered. Send it again with: npx -y grill-me-ai resend ${id}\nSTATUS: EXPIRED\n`,
-  );
+  assert.ok(expired.stdout.startsWith(`The grill expired before it was answered. Send it again with: npx -y grill-me-ai resend ${id}\n`));
+  assert.match(expired.stdout, /Resume Grill Me/);
+  assert.ok(expired.stdout.endsWith("STATUS: EXPIRED\n"));
 
   const resent = await run(["resend", id, "--qr", "off"], { home, server });
   assert.equal(resent.code, 0, resent.stderr);

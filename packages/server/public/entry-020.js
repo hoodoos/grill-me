@@ -9,5 +9,5 @@
 // their warm cached copies. A new query alone would not be enough: relative imports of changed
 // modules would still hit stale cache entries.
 const params = new URLSearchParams(location.search);
-if (params.get("session") === "2") await import("/session-app.js?v=answer-fixes-4");
+if (params.get("session") === "2") await import("/session-app.js?v=resume-1");
 else await import("/app.js?v=answer-fixes-1");

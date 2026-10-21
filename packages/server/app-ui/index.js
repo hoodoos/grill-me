@@ -3,16 +3,19 @@ import { mountGrill } from "../../ui/src/grill.js";
 import { parseSessionLink, openRound, sealRoundAnswers } from "../../core/src/session.js";
 import { newId, isId } from "../../core/src/crypto.js";
 import { LIMITS } from "../../core/src/format.js";
+import { answerLines } from "../../core/src/answers.js";
+import { EXPIRY_HELP, RESUME_HELP, draftLines } from "../../core/src/recovery.js";
 
 const app = new App({ name: "Grill Me", version: "0.2.0" }, { availableDisplayModes: ["inline", "fullscreen"] }, { autoResize: false });
 const $ = id => document.getElementById(id);
 let ids, link, started = false, alive = true, generation = 0, revision = -1, round = 0;
 let ui, grill, draft, intent, confirmed = false, notice, notifyingNotice, retryAction;
-let pollController;
+let pollController, expiresAt, resumeId, copyLines = null, resumeEnded = false;
 const cardPointers = new Set();
 let cardClickPending = false;
 let lostRound = 0; // current-only loss notice; never misrepresent another winner as ours
 function retire() {
+  $("actions").append($("recovery-open")); // host control survives retirement of the shared mount
   try { ui?.destroy(); } catch {} ui = null;
   const old = $("grill-root"), fresh = old.cloneNode(false); fresh.removeAttribute("class"); old.replaceWith(fresh);
 }
@@ -22,10 +25,46 @@ function message(text) {
 }
 function retry(fn) { retryAction = fn; $("retry").hidden = !fn; }
 $("retry").onclick = () => { const fn = retryAction; retry(null); if (fn) void fn(); };
+async function copyRecovery(text) {
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); $("recovery-state").textContent = "Copied."; return; } catch {}
+  $("recovery-manual").textContent = text; $("recovery-manual").hidden = false;
+  $("recovery-manual").focus(); const selection = window.getSelection(), range = document.createRange();
+  range.selectNodeContents($("recovery-manual")); selection?.removeAllRanges(); selection?.addRange(range);
+  $("recovery-state").textContent = "Select and copy this text manually.";
+}
+const resumePrompt = () => `Resume Grill Me for interview ${resumeId}. Check for saved answers first; preserve a live pending round and its draft. If expired, resend only the last unanswered questions from this chat on a fresh link.`;
+function openRecovery() {
+  $("recovery-help").textContent = "Inline cards do not keep an agent wait running while you answer. Submitted answers request a host follow-up (15-second confirmation limit); acceptance does not prove the model received them. Collection uses one 1-second answer read. A broken bridge request times out after 30 seconds.\n\n" + RESUME_HELP;
+  $("recovery-expiry").textContent = EXPIRY_HELP + (expiresAt ? `\nCurrent server deadline: ${new Date(expiresAt).toLocaleString()}.` : "");
+  $("resume-interview").hidden = resumeEnded || !app.getHostCapabilities()?.message?.text;
+  $("copy-resume").hidden = resumeEnded;
+  $("recovery-copy").hidden = !copyLines && !grill;
+  $("recovery-state").textContent = resumeEnded ? "This interview was explicitly finished or cancelled." : "Resume requests a new agent turn; it cannot guarantee that your host will run it. If unavailable, type Resume Grill Me in this same chat.";
+  $("recovery-manual").hidden = true; $("recovery-dialog").showModal();
+}
+$("recovery-open").onclick = openRecovery;
+$("recovery-close").onclick = () => $("recovery-dialog").close();
+$("copy-resume").onclick = () => void copyRecovery(resumePrompt());
+$("recovery-copy").onclick = () => void copyRecovery(copyLines ?? (grill && ui ? draftLines(grill, draft) : null));
+$("resume-interview").onclick = async () => {
+  const button = $("resume-interview"), g = generation; button.disabled = true;
+  try {
+    const result = await app.sendMessage({ role: "user", content: [{ type: "text", text: resumePrompt() }] }, { timeout: 15_000 });
+    if (result.isError) throw new Error("rejected");
+    if (g !== generation || resumeEnded) return;
+    $("recovery-state").textContent = "Resume request accepted by the host. If the agent does not respond, type Resume Grill Me in this same chat; your questions/answers have not been replaced or acknowledged.";
+  } catch { if (g !== generation || resumeEnded) return; $("recovery-state").textContent = "Resume was not confirmed. Type Resume Grill Me in this same chat, or copy the resume message."; }
+  finally { button.disabled = false; }
+};
 function end(reason) {
   if (!alive) return; alive = false; generation++; pollController?.abort();
+  resumeEnded = ["finished", "cancelled"].includes(reason);
+  if (resumeEnded) copyLines = null;
+  else if (!copyLines && grill && ui) copyLines = draftLines(grill, draft);
+  $("recovery-manual").textContent = "";
   ids = link = grill = draft = intent = notice = null; lostRound = 0; retry(null);
-  message({ finished: "All done—your agent has finished this grill.", cancelled: "This grill was cancelled.", expired: "This session expired." }[reason] ?? "Session ended or expired.");
+  message(({ finished: "All done—your agent has finished this grill.", cancelled: "This grill was cancelled.", expired: "This session expired." }[reason] ?? "Session ended or expired.") + (resumeEnded ? "" : " Type Resume Grill Me in this same chat to resend the last unanswered questions on a fresh link. The old link cannot update itself."));
 }
 async function tool(name, args, signal) {
   const result = await app.callServerTool({ name, arguments: args }, { timeout: 30_000, signal });
@@ -77,10 +116,11 @@ async function submitIntent() {
   generation++; // retired onChange/swipe callbacks cannot recreate purged plaintext
   confirmed = true; grill = draft = null; retry(null);
   winningNotice(result);
-  message("Sent. Waiting for your agent to pick up your answers.");
+  message("Sent. Waiting for your agent to pick up your answers. If it stops, open Timeout & resume or type Resume Grill Me in this chat.");
   void notify(); // host message latency must not block current-state polling
 }
 async function send(answers) {
+  copyLines = answerLines(grill, answers); // memory-only current round, cleared on ACK/advance/finish
   const g = generation;
   if (!intent) {
     const savedRound = round, savedRevision = revision;
@@ -95,6 +135,8 @@ async function accept(snapshot) {
   if (!alive || !snapshot || snapshot.v !== 2 || snapshot.id !== ids.id || !Number.isInteger(snapshot.revision) || snapshot.revision < revision || snapshot.round < round) return;
   if (snapshot.revision === revision) return; // stale/repeated results never remount a partial draft
   const oldRound = round; revision = snapshot.revision; round = snapshot.round;
+  expiresAt = snapshot.expiresAt;
+  if (oldRound !== round || snapshot.state === "idle") { copyLines = null; $("recovery-manual").textContent = ""; $("recovery-copy").hidden = true; }
   if (snapshot.state === "pending") {
     generation++; const g = generation; retire();
     if (oldRound !== round) draft = null;
@@ -131,7 +173,8 @@ async function poll() {
       if (result.status === "STATE") await accept(result.snapshot);
     } catch {
       if (!alive) return;
-      if (ui) ui.setNote("Connection interrupted. Your current draft is kept in this open view.");
+      if (ui) ui.setNote("Connection interrupted (bridge requests time out after 30 seconds). Your draft is kept in this open view. Use Timeout & resume, or type Resume Grill Me in this same chat.");
+      else $("status").textContent = "Connection interrupted. Use Timeout & resume or type Resume Grill Me in this same chat. A successful retry does not prove the agent is listening.";
       await new Promise(resolve => setTimeout(resolve, 1200));
     }
   }
@@ -146,6 +189,8 @@ function compactLayout() {
   // card interaction alive through pointerup/click, not only the editable itself.
   const editing = cardClickPending || cardPointers.size > 0 || (document.hasFocus() && $("cards").contains(document.activeElement));
   const compact = small && !editing;
+  const helpParent = !$("cards").hidden && !compact ? $("grill-root").querySelector(".gm-top") : $("actions");
+  if (helpParent && $("recovery-open").parentElement !== helpParent) helpParent.append($("recovery-open"));
   host.classList.toggle("editing-small", small && editing);
   host.classList.toggle("compact", compact); $("compact").hidden = !compact;
   if (!compact) { $("compact-title").textContent = $("compact-copy").textContent = ""; return; }
@@ -217,9 +262,9 @@ app.ontoolresult = result => {
   try {
     const parsed = parseSessionLink(privateLink), url = new URL(privateLink);
     if (url.origin !== "https://grill-me.ai" || url.search !== "?session=2") return;
-    ids = parsed; link = privateLink;
+    ids = parsed; link = privateLink; resumeId = parsed.id;
   } catch { return; }
-  started = true;
+  started = true; $("recovery-open").hidden = false;
   if (!app.getHostCapabilities()?.serverTools) { message("This host cannot connect the interactive cards. Use the same phone link already shown in chat."); return; }
   void poll();
 };

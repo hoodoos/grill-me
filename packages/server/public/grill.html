@@ -7,27 +7,30 @@
 <link rel="icon" href="/favicon.svg?v=a27362e00dce" type="image/svg+xml">
 <link rel="stylesheet" href="/ui/grill.css?v=04f928494bc5">
 <link rel="stylesheet" href="/style.css?v=1b0d9aaf5c07">
-<script type="module" src="/entry-020.js?v=answer-fixes-4"></script>
+<link rel="stylesheet" href="/recovery.css?v=resume-1">
+<script type="module" src="/entry-020.js?v=resume-1"></script>
 </head>
 <body>
 <main id="layout">
   <section id="screen-message" class="page" hidden>
     <p id="message-text"></p>
+    <p><button data-recovery type="button" hidden>Timeout &amp; resume</button></p>
     <p class="meta"><a href="/">Grill Me</a></p>
   </section>
 
   <section id="screen-grill" hidden>
     <div id="grill-root"></div>
-    <div id="grill-footer"><button id="copy-answers" type="button">Copy answers</button></div>
+    <div id="grill-footer"><button id="copy-answers" type="button">Copy answers</button><button data-recovery type="button" hidden>Timeout &amp; resume</button></div>
   </section>
 
   <section id="screen-done" class="page" hidden>
     <h1 id="done-title">Sent ✓</h1>
     <p id="done-text">Your agent has your answers.</p>
     <pre id="done-lines" hidden></pre>
-    <p><button id="done-copy" type="button">Copy answers</button></p>
+    <p><button id="done-copy" type="button">Copy answers</button> <button data-recovery type="button" hidden>Timeout &amp; resume</button></p>
     <p class="meta">Get grills pushed to your phone, even when your agent isn't running → <a href="/go/hub">Agent Hub</a></p>
   </section>
 </main>
+<dialog id="recovery-dialog" aria-labelledby="recovery-title"><h2 id="recovery-title">Timeout &amp; resume</h2><p id="recovery-help"></p><p id="recovery-expiry"></p><p id="recovery-state" role="status"></p><p><button id="resume-interview" type="button">Resume interview</button> <button id="copy-resume" type="button">Copy resume message</button> <button id="recovery-copy" type="button" hidden>Copy answers</button></p><pre id="recovery-manual" tabindex="0" hidden aria-label="Select and copy recovery text"></pre><button id="recovery-close" type="button">Back to interview</button></dialog>
 </body>
 </html>

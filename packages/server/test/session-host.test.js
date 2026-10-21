@@ -42,16 +42,24 @@ test("legacy crypto, format, safe text and CSS stay byte-identical to the pinned
   }
 });
 
-test("grill.html changes only cache URLs for the entry and standalone host style", { skip: !pinnedAvailable && "pinned base object unavailable" }, () => {
+test("grill.html preserves legacy screens while isolating recovery controls and versioning changed modules", { skip: !pinnedAvailable && "pinned base object unavailable" }, () => {
   const base = pinned("packages/server/public/grill.html").split("\n");
-  const now = read("packages/server/public/grill.html").split("\n");
+  const html = read("packages/server/public/grill.html");
+  assert.equal((html.match(/<dialog id="recovery-dialog"/g) || []).length, 1);
+  assert.match(html, /Copy resume message/);
+  assert.match(html, /recovery\.css\?v=resume-1/);
+  const now = html.replace(/<link rel="stylesheet" href="\/recovery.css[^\n]+\n/, "")
+    .replace(/    <p><button data-recovery[^\n]+\n/, "")
+    .replaceAll('<button data-recovery type="button" hidden>Timeout &amp; resume</button>', "")
+    .replace('</button> </p>', '</button></p>')
+    .replace(/<dialog id="recovery-dialog"[^\n]+\n/, "").split("\n");
   assert.equal(base.length, now.length, "grill.html must not gain or lose lines");
   const diffs = base.map((l, i) => [l, now[i]]).filter(([a, b]) => a !== b);
   const styleVersion = createHash("sha256").update(read("packages/server/public/style.css")).digest("hex").slice(0, 12);
   const iconVersion = createHash("sha256").update(read("packages/server/public/favicon.svg")).digest("hex").slice(0, 12);
   assert.deepEqual(diffs, [[base.find(l => l.includes('rel="icon"')), `<link rel="icon" href="/favicon.svg?v=${iconVersion}" type="image/svg+xml">`],
     [base.find(l => l.includes('/style.css?')), `<link rel="stylesheet" href="/style.css?v=${styleVersion}">`],
-    ['<script type="module" src="/app.js"></script>', '<script type="module" src="/entry-020.js?v=answer-fixes-4"></script>']],
+    ['<script type="module" src="/app.js"></script>', '<script type="module" src="/entry-020.js?v=resume-1"></script>']],
     "only changed standalone assets gain cache versions; the shared CSS URL stays untouched");
 });
 
@@ -66,11 +74,11 @@ test("the session page and its module graph are served with correct types", asyn
     const page = await fetch(`${origin}/g/${id}?session=2`);
     assert.equal(page.status, 200);
     const html = await page.text();
-    assert.match(html, /src="\/entry-020\.js\?v=answer-fixes-4"/, "the grill page enters through the versioned entry");
+    assert.match(html, /src="\/entry-020\.js\?v=resume-1"/, "the grill page enters through the versioned entry");
     const csp = page.headers.get("content-security-policy");
     assert.match(csp, /default-src 'self'/, "strict CSP intact");
 
-    for (const [p, name] of [["/entry-020.js?v=answer-fixes-4", "entry"], ["/session-app.js?v=answer-fixes-4", "session app"], ["/core/session.js", "session crypto"]]) {
+    for (const [p, name] of [["/core/recovery.js?v=resume-1", "recovery"], ["/entry-020.js?v=resume-1", "entry"], ["/session-app.js?v=resume-1", "session app"], ["/core/session.js", "session crypto"]]) {
       const r = await fetch(origin + p, { cache: "no-store" });
       assert.equal(r.status, 200, `${name} served`);
       assert.match(r.headers.get("content-type"), /text\/javascript/, `${name} served as a JS module`);

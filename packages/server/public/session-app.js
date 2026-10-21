@@ -16,12 +16,14 @@
 // merely matches ours is NOT proof our ciphertext won — the same id with a different blob is a
 // loss — so it triggers an exact idempotent re-POST; only its 200/204 confirms delivery.
 import {
-  openRound, sealRoundAnswers, deriveSessionKeys, validateRound,
+  openRound, openRoundAnswers, sealRoundAnswers, deriveSessionKeys, validateRound,
 } from "/core/session.js"; // direct import: never the cached 0.1 /core/index.js
 import { answerLines } from "/core/answers.js"; // legacy module, byte-unchanged since 0.1
 import { b64urlEncode } from "/core/crypto.js"; // legacy module, byte-unchanged since 0.1
 import { LIMITS } from "/core/format.js";
 import { mountGrill } from "/ui/grill.js?v=answer-fixes-1";
+
+import { EXPIRY_HELP, RESUME_HELP, draftLines } from "/core/recovery.js?v=resume-1";
 
 const $ = (id) => document.getElementById(id);
 const KEEP_MS = 3 * 86400000; // abandoned local state expires after 3 days
@@ -112,6 +114,7 @@ let currentGrill = null; // memory-only, for the grill screen's Copy answers whi
 let grillUi = null;
 let pollAbort = null;
 let awaitingNext = false; // true only after an authoritative idle/ACK snapshot
+let expiresAt = null, recoveryText = null, recoveryEnded = false;
 let refreshPoll = false; // reconnect must re-read state even if offline happened between polls
 
 const stale = () => Object.assign(new Error("stale round"), { userMessage: "This round moved on." });
@@ -137,7 +140,13 @@ function message(text) {
   $("message-text").textContent = text;
   show("screen-message");
 }
+let idleHelpTimer;
 const waiting = () => {
+  clearTimeout(idleHelpTimer);
+  const g = gen;
+  idleHelpTimer = setTimeout(() => {
+    if (alive && gen === g && awaitingNext) $("message-text").textContent = "Still waiting for the next questions. The agent may have stopped its turn. Return to the same chat and type Resume Grill Me. Your interview expires after one hour without a new round, answer or collection.";
+  }, 45_000);
   message("Your agent is thinking. Keep this page open—your next questions will appear here.");
   const screen = $("screen-message");
   screen.classList.add("session-thinking");
@@ -163,29 +172,58 @@ function sentScreen() {
   currentGrill = null;
   $("thinking-stack")?.remove();
   $("done-title").textContent = "Sent ✓";
-  $("done-text").textContent = "Waiting for your agent to pick up your answers.";
+  $("done-text").textContent = "Waiting for your agent to pick up your answers. If it stops waiting, type Resume Grill Me in the same chat. Copy answers is available until collection or expiry.";
   $("done-lines").hidden = true;
-  $("done-copy").hidden = true; // submitted plaintext is deliberately no longer retained
+  $("done-copy").hidden = false; // decrypt only this current submitted intent on explicit Copy
   show("screen-done");
 }
 
-async function copyAnswers() {
-  // Copy answers is for the UNSENT state: the live cards (works offline, draft included).
-  // Winning submissions purge their plaintext, so there is deliberately nothing to copy there.
-  const answers = !$("screen-grill").hidden && grillUi ? grillUi.answers() : null;
-  if (!currentGrill || !answers) return;
-  const text = answerLines(currentGrill, answers);
-  try { await navigator.clipboard.writeText(text); return; } catch {}
-  const ta = document.createElement("textarea");
-  ta.readOnly = true;
-  ta.value = text;
-  ta.style.position = "fixed";
-  ta.style.opacity = "0";
-  document.body.append(ta);
-  ta.select();
-  try { document.execCommand("copy"); } catch {}
-  ta.remove();
+function resumePrompt() {
+  return `Resume Grill Me for interview ${id}. Check for saved answers first; keep a live pending round and its draft. If expired, resend only the last unanswered questions from this chat on a fresh link.`;
 }
+async function copyText(text) {
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); $("recovery-state").textContent = "Copied."; return; } catch {}
+  $("recovery-manual").textContent = text; $("recovery-manual").hidden = false;
+  if (!$("recovery-dialog").open) $("recovery-dialog").showModal();
+  $("recovery-manual").focus(); const selection = window.getSelection(), range = document.createRange();
+  range.selectNodeContents($("recovery-manual")); selection?.removeAllRanges(); selection?.addRange(range);
+  $("recovery-state").textContent = "Select and copy this text manually.";
+}
+async function submittedText(entry, key, round) {
+  if (!entry?.roundBlob || !entry.intent?.winner || !key) return null;
+  const ids = { id, secret: key, round };
+  const questions = await openRound(entry.roundBlob, ids);
+  return answerLines(questions, await openRoundAnswers(entry.intent, questions, ids));
+}
+async function copyAnswers() {
+  const g = gen, round = mountedRound || readJson(curKey(id))?.round;
+  let text = recoveryText;
+  if (alive) {
+    const answers = !$("screen-grill").hidden && grillUi ? grillUi.answers() : null;
+    if (currentGrill && answers) text = draftLines(currentGrill, loadRound(round)?.snap);
+    else {
+      try { text = await submittedText(loadRound(round), secret, round); } catch { text = null; }
+    }
+    if (!alive || gen !== g || !currentRound(round)) return;
+  }
+  if (text) await copyText(text);
+}
+function recoveryInfo() {
+  $("recovery-help").textContent = "Hosted phone waits: 45 seconds per call by default (up to 50). Codex plugin: 14 minutes per call. CLI background wait: no fixed total timeout. Your host can stop earlier. Inline cards do not keep an agent wait running while you answer.\n\n" + RESUME_HELP;
+  $("recovery-expiry").textContent = EXPIRY_HELP + (expiresAt ? `\nCurrent server deadline: ${new Date(expiresAt).toLocaleString()}.` : "");
+  $("resume-interview").hidden = true; // a normal website cannot post into an agent chat
+  $("copy-resume").hidden = recoveryEnded;
+  $("recovery-copy").hidden = !recoveryText && !currentGrill && !loadRound(mountedRound || readJson(curKey(id))?.round)?.intent?.winner;
+  $("recovery-state").textContent = recoveryEnded ? "This interview was explicitly finished or cancelled." : "Return to the SAME agent chat and type Resume Grill Me, or copy the message below. This page cannot wake a closed agent turn.";
+  $("recovery-manual").hidden = true;
+}
+for (const button of document.querySelectorAll("[data-recovery]")) {
+  button.hidden = false; button.onclick = () => { recoveryInfo(); $("recovery-dialog").showModal(); };
+}
+$("recovery-close").onclick = () => $("recovery-dialog").close();
+$("copy-resume").onclick = () => void copyText(resumePrompt());
+$("recovery-copy").onclick = copyAnswers;
 $("copy-answers").addEventListener("click", copyAnswers);
 $("done-copy").addEventListener("click", copyAnswers);
 
@@ -202,6 +240,18 @@ async function terminalReason(response) {
 }
 function ended(reason) {
   if (!alive) return;
+  // Preserve a recovery copy only in THIS open document on expiry, never storage/history.
+  // Snapshot before synchronous purge; a later ACK/finish cannot recreate saved state.
+  const fallbackRound = mountedRound || readJson(curKey(id))?.round;
+  const entry = loadRound(fallbackRound), key = secret;
+  const unsent = currentGrill && grillUi ? draftLines(currentGrill, entry?.snap)
+    : entry?.grill && entry.snap ? draftLines(entry.grill, entry.snap) : null;
+  const recoverable = !["finished", "cancelled"].includes(reason);
+  recoveryEnded = !recoverable;
+  recoveryText = recoverable ? unsent : null;
+  if (recoverable && !recoveryText) void submittedText(entry, key, fallbackRound).then(text => {
+    if (!alive && !recoveryEnded) { recoveryText = text; $("recovery-copy").hidden = !text; }
+  }).catch(() => {});
   alive = false;
   awaitingNext = false;
   gen++; // in-flight fetch/decrypt/onChange/POST callbacks die at their next guard
@@ -211,7 +261,7 @@ function ended(reason) {
   writeToken = null;
   retireRoot();
   endReason = knownReason(reason);
-  message(END_MESSAGES[endReason] ?? "Session ended or expired.");
+  message((END_MESSAGES[endReason] ?? "Session ended or expired.") + (recoverable ? " Return to the same agent chat and type Resume Grill Me to resend unanswered questions on a fresh link. This old page cannot receive the new interview. Open Timeout & resume to copy any current answers recovered in this open page." : ""));
 }
 
 // No key is needed to read an end receipt. This also handles reload after purge and a second
@@ -224,7 +274,14 @@ async function checkEndWithoutKey() {
     if (gen !== generation || secret) return;
     if (r.status === 404) {
       if (alive) ended(reason);
-      else if (!endReason && reason) { endReason = reason; message(END_MESSAGES[reason]); }
+      else if (!endReason && reason) {
+        endReason = reason;
+        if (["finished", "cancelled"].includes(reason)) {
+          recoveryEnded = true; recoveryText = null; $("recovery-manual").textContent = "";
+          $("recovery-copy").hidden = $("copy-resume").hidden = true;
+        }
+        message(END_MESSAGES[reason]);
+      }
     } else if (r.status === 200 && alive) {
       message("This link is missing its key. Open the full link from your agent.");
     }
@@ -268,6 +325,7 @@ async function mountRoundFromRelay(snap) {
     return;
   }
   if (!alive || gen !== g || revision !== rev) return; // superseded while decrypting
+  saveRound(round, { roundBlob: { ct: snap.ct, iv: snap.iv } });
   const local = loadRound(round);
   mountRound(grill, round, local?.snap ?? null, "");
 }
@@ -285,8 +343,9 @@ function applySnapshot(snap) {
   if (seen?.revision > snap.revision) return; // another tab has already observed the next state
   // The relay decides expiry; a device clock ahead of the relay must not invent an end reason.
   revision = snap.revision;
+  expiresAt = Number.isFinite(snap.expiresAt) ? snap.expiresAt : null;
   awaitingNext = snap.state === "idle";
-  safeSet(curKey(id), JSON.stringify({ ts: Date.now(), round: snap.round, revision: snap.revision }));
+  safeSet(curKey(id), JSON.stringify({ ts: Date.now(), round: snap.round, revision: snap.revision, expiresAt }));
 
   if (snap.state === "pending" && typeof snap.ct === "string" && typeof snap.iv === "string") {
     if (snap.round === mountedRound && grillUi) return; // the live round: keep the draft
@@ -306,6 +365,7 @@ function applySnapshot(snap) {
   }
 
   if (snap.state === "answered") {
+    if (typeof snap.ct === "string" && typeof snap.iv === "string") saveRound(snap.round, { roundBlob: { ct: snap.ct, iv: snap.iv } });
     const intent = loadRound(snap.round)?.intent;
     if (intent && snap.submissionId === intent.submissionId && intent.winner) {
       sentScreen(); // reload after a confirmed win: the truthful sent/wait screen, nothing else
@@ -337,6 +397,7 @@ function applySnapshot(snap) {
     // The agent acked: every round's data goes (the session key stays until finish/expiry).
     // Bumping the generation also kills a late POST reply from the round just acked.
     purgeRoundsExcept(null);
+    recoveryText = null; $("recovery-copy").hidden = true; $("recovery-manual").textContent = "";
     mountedRound = 0;
     currentGrill = null;
     gen++;

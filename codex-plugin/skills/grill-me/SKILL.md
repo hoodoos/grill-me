@@ -67,6 +67,16 @@ pending questions and uncollected answers. Cancellation explicitly aborts any cu
 The relay and phone keep only the current round, not the interview history; retain history
 in the agent conversation. Ordinary API/CLI one-shot calls remain compatible.
 
+## Timeout and resume recovery
+
+Codex plugin: the configured answer wait is **14 minutes per call** (840 seconds, within its 15-minute tool budget). Generic local MCP defaults to **45 seconds**, or its advertised configured value. Show the actual limit from the tool before waiting. A host may stop earlier.
+
+Before waiting, tell the user: **If the agent stops waiting, type `Resume Grill Me` in this same chat.** A wait timeout does not expire the interview. Pending questions expire one hour after publication, and uncollected answers one hour after submission; opening the page does not extend this.
+
+On `Resume Grill Me` (or `resume` in this interview), check the saved id first: `grill_wait` with `seconds:1`, or CLI `fetch <id>`. Retain returned answers before normal collection/acknowledgement, then continue the frontier. If still pending, keep the same id, link, question numbers and partial draft; do not send a replacement round. If idle, use already collected answers in this conversation to prepare the next frontier. If expired, resend only the last unanswered frontier from this conversation into a fresh session and show its new link; do not claim the expired page will update. An explicitly finished/cancelled interview stays ended. If context is missing, ask for the copied answers/questions instead of guessing. Offline or an unconfirmed publication is not expiry: retry its saved identity/exact request.
+
+Copy answers is a manual fallback: the user can paste the current answers into this conversation. It does not prove automatic delivery. Never ask the user to change to a new interview merely because one wait timed out.
+
 ## Credit and source
 
 Original skill by [Matt Pocock](https://github.com/mattpocock/skills/blob/49dd158d1076134a641b33efb035946536778336/skills/productivity/grilling/SKILL.md), MIT licensed.
